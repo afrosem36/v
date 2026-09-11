@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronRight, Download, Upload, Trash2 } from "lucide-react";
+import { ChevronRight, Download, Upload, Trash2, UserRound, Sparkles, Dumbbell } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -15,7 +15,8 @@ import { EQUIPMENT_SEED } from "@/lib/db/seed/equipment";
 import { exportAllDataJSON, importAllDataJSON, exportWorkoutHistoryCSV, clearAllData } from "@/lib/db/backup";
 import { downloadTextFile } from "@/lib/utils/download";
 import { todayStr } from "@/lib/utils/date";
-import { kgToDisplay, displayToKg } from "@/lib/utils/format";
+import { LastUpdated } from "@/components/LastUpdated";
+import { useAuth } from "@/lib/auth/AuthProvider";
 
 function useSettingsData() {
   return useLiveQuery(async () => {
@@ -27,6 +28,7 @@ function useSettingsData() {
 
 export default function SettingsPage() {
   const data = useSettingsData();
+  const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -67,6 +69,41 @@ export default function SettingsPage() {
     <div className="flex flex-col gap-4 p-5 pt-[calc(1.5rem+var(--safe-top))] pb-10">
       <div className="text-2xl font-bold tracking-tight">Settings</div>
 
+      <Link href="/profile">
+        <Card className="flex items-center justify-between active:brightness-95">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+              <UserRound size={18} />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate font-medium">{user.name}</div>
+              <div className="truncate text-xs text-text-muted">{user.email}</div>
+            </div>
+          </div>
+          <ChevronRight size={16} className="text-text-faint" />
+        </Card>
+      </Link>
+
+      <Link href="/coach">
+        <Card className="flex items-center justify-between active:brightness-95">
+          <div className="flex items-center gap-2">
+            <Sparkles size={16} className="text-accent" />
+            <span className="font-medium">AI Coach &amp; plan import</span>
+          </div>
+          <ChevronRight size={16} className="text-text-faint" />
+        </Card>
+      </Link>
+
+      <Link href="/exercises">
+        <Card className="flex items-center justify-between active:brightness-95">
+          <div className="flex items-center gap-2">
+            <Dumbbell size={16} className="text-text-muted" />
+            <span className="font-medium">Exercise library</span>
+          </div>
+          <ChevronRight size={16} className="text-text-faint" />
+        </Card>
+      </Link>
+
       <Card>
         <CardLabel>Body Weight Units</CardLabel>
         <div className="mt-2">
@@ -84,41 +121,13 @@ export default function SettingsPage() {
       </Card>
 
       <Card>
-        <CardLabel>Body Profile</CardLabel>
-        <div className="mt-2 flex flex-col gap-3">
-          <div>
-            <div className="mb-1 text-xs text-text-muted">Height</div>
-            <NumberStepper
-              value={settings.heightCm ?? 170}
-              onChange={(v) => updateSettings({ heightCm: Math.max(1, Math.round(v)) })}
-              step={1}
-              decimals={0}
-              suffix="cm"
-              size="md"
-            />
-          </div>
-          <div>
-            <div className="mb-1 text-xs text-text-muted">Goal weight</div>
-            <NumberStepper
-              value={settings.goalWeightKg != null ? kgToDisplay(settings.goalWeightKg, settings.units) : 70}
-              onChange={(v) => updateSettings({ goalWeightKg: displayToKg(v, settings.units) })}
-              step={0.5}
-              decimals={1}
-              suffix={settings.units}
-              size="md"
-            />
-          </div>
-        </div>
-        <p className="mt-2 text-xs text-text-muted">Used for BMI and "weight to go" on the Body Metrics dashboard.</p>
-      </Card>
-
-      <Card>
         <CardLabel>Daily Step Goal</CardLabel>
         <div className="mt-2">
           <NumberStepper
             value={settings.stepGoal}
             onChange={(v) => updateSettings({ stepGoal: Math.max(1000, Math.round(v)) })}
             step={500}
+            max={100_000}
             decimals={0}
             size="md"
           />
@@ -212,7 +221,7 @@ export default function SettingsPage() {
 
       <Card>
         <CardLabel>Available Equipment</CardLabel>
-        <p className="mt-1 text-xs text-text-muted">Untoggle anything your gym doesn't have — exercises auto-substitute.</p>
+        <p className="mt-1 text-xs text-text-muted">Untoggle anything your gym doesn&apos;t have — exercises auto-substitute.</p>
         <div className="mt-3 flex flex-col gap-1.5">
           {EQUIPMENT_SEED.filter((eq) => eq.key !== "bodyweight").map((eq) => {
             const row = userEquipment.find((u) => u.equipmentKey === eq.key);
@@ -268,7 +277,9 @@ export default function SettingsPage() {
         </Button>
       </Card>
 
-      <p className="text-center text-xs text-text-faint">Vshape · Dark theme · Data stored on this device</p>
+      <p className="text-center text-xs text-text-faint">
+        Vshape · Dark theme · Data stored on this device · <LastUpdated />
+      </p>
     </div>
   );
 }

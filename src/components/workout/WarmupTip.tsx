@@ -16,7 +16,7 @@ export function WarmupTip({ exercise }: { exercise: Exercise }) {
           <Flame size={16} className="mt-0.5 shrink-0 text-text-muted" />
           <div className="text-xs text-text-muted">
             <span className="font-medium text-text">Optional warm-up:</span> 3–5 min light cardio, then 1–2 light
-            sets of {exercise.name.toLowerCase()} below your working weight. Warm-up sets don't need to be logged.
+            sets of {exercise.name.toLowerCase()} below your working weight. Warm-up sets don&apos;t need to be logged.
           </div>
         </div>
         <button onClick={() => setDismissed(true)} className="shrink-0 text-text-faint" aria-label="Dismiss">

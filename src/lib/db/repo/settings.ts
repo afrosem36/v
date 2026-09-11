@@ -11,3 +11,13 @@ export async function getSettings(): Promise<AppSettings> {
 export async function updateSettings(patch: Partial<Omit<AppSettings, "id">>): Promise<void> {
   await db.appSettings.update(SETTINGS_ID, patch);
 }
+
+/**
+ * Called by anything that edits the weekly program. Once stamped, library version bumps stop
+ * re-applying the stock program over the user's own (see seed/index.ts).
+ */
+export async function markPlanCustomized(): Promise<void> {
+  const settings = await db.appSettings.get(SETTINGS_ID);
+  if (!settings || settings.planCustomizedAt) return;
+  await db.appSettings.update(SETTINGS_ID, { planCustomizedAt: new Date().toISOString() });
+}

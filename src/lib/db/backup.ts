@@ -2,7 +2,7 @@ import { db } from "@/lib/db/db";
 import { getCompletedSessions } from "@/lib/db/repo/workouts";
 import { totalLoadForSet } from "@/lib/engine/weight-math";
 
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
 
 interface BackupPayload {
   version: number;
@@ -19,10 +19,19 @@ interface BackupPayload {
     dailySteps: unknown[];
     appSettings: unknown[];
     userEquipment: unknown[];
+    // v2 additions. Restoring a v1 file leaves these empty rather than failing.
+    scheduleOverrides?: unknown[];
+    exerciseNotes?: unknown[];
+    coachPlans?: unknown[];
+    customExercises?: unknown[];
   };
 }
 
-/** Excludes exercises/equipment/muscle groups (re-derived from the app's library) and photos (binary, kept device-local). */
+/**
+ * Excludes the stock exercise/equipment/muscle library (re-derived on import) and photos
+ * (binary, kept device-local). Custom exercises ARE included — nothing else can recreate them.
+ * Account credentials are never exported.
+ */
 export async function exportAllDataJSON(): Promise<string> {
   const [
     workoutPlans,
@@ -36,6 +45,10 @@ export async function exportAllDataJSON(): Promise<string> {
     dailySteps,
     appSettings,
     userEquipment,
+    scheduleOverrides,
+    exerciseNotes,
+    coachPlans,
+    allExercises,
   ] = await Promise.all([
     db.workoutPlans.toArray(),
     db.workoutDays.toArray(),
@@ -48,6 +61,10 @@ export async function exportAllDataJSON(): Promise<string> {
     db.dailySteps.toArray(),
     db.appSettings.toArray(),
     db.userEquipment.toArray(),
+    db.scheduleOverrides.toArray(),
+    db.exerciseNotes.toArray(),
+    db.coachPlans.toArray(),
+    db.exercises.toArray(),
   ]);
 
   const payload: BackupPayload = {
@@ -65,6 +82,10 @@ export async function exportAllDataJSON(): Promise<string> {
       dailySteps,
       appSettings,
       userEquipment,
+      scheduleOverrides,
+      exerciseNotes,
+      coachPlans,
+      customExercises: allExercises.filter((e) => e.isCustom),
     },
   };
   return JSON.stringify(payload, null, 2);
@@ -88,6 +109,10 @@ export async function importAllDataJSON(json: string): Promise<void> {
       db.dailySteps,
       db.appSettings,
       db.userEquipment,
+      db.scheduleOverrides,
+      db.exerciseNotes,
+      db.coachPlans,
+      db.exercises,
     ],
     async () => {
       await Promise.all([
@@ -102,6 +127,9 @@ export async function importAllDataJSON(json: string): Promise<void> {
         db.dailySteps.clear(),
         db.appSettings.clear(),
         db.userEquipment.clear(),
+        db.scheduleOverrides.clear(),
+        db.exerciseNotes.clear(),
+        db.coachPlans.clear(),
       ]);
       // biome-ignore-start
       await db.workoutPlans.bulkAdd(d.workoutPlans as never[]);
@@ -115,6 +143,11 @@ export async function importAllDataJSON(json: string): Promise<void> {
       await db.dailySteps.bulkAdd(d.dailySteps as never[]);
       await db.appSettings.bulkAdd(d.appSettings as never[]);
       await db.userEquipment.bulkAdd(d.userEquipment as never[]);
+      await db.scheduleOverrides.bulkAdd((d.scheduleOverrides ?? []) as never[]);
+      await db.exerciseNotes.bulkAdd((d.exerciseNotes ?? []) as never[]);
+      await db.coachPlans.bulkAdd((d.coachPlans ?? []) as never[]);
+      // Custom exercises are merged rather than cleared — the stock library must survive.
+      if (d.customExercises?.length) await db.exercises.bulkPut(d.customExercises as never[]);
       // biome-ignore-end
     }
   );

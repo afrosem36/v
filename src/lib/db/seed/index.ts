@@ -1,4 +1,4 @@
-import { db } from "@/lib/db/db";
+import { db, currentTrainingDbName } from "@/lib/db/db";
 import { MUSCLE_GROUP_SEED } from "./muscle-groups";
 import { EQUIPMENT_SEED, DEFAULT_AVAILABLE_EQUIPMENT } from "./equipment";
 import { EXERCISE_SEED } from "./exercises";
@@ -37,17 +37,23 @@ function defaultSettings(now: string): AppSettings {
     libraryVersion: LIBRARY_VERSION,
     heightCm: null,
     goalWeightKg: null,
+    planCustomizedAt: null,
+    onboardingCompletedAt: null,
   };
 }
 
-let seedingPromise: Promise<void> | null = null;
+/** Keyed by database name — each account has its own database, and each needs its own seed pass. */
+const seedingPromises = new Map<string, Promise<void>>();
 
 /** Idempotent: seeds on first run, then syncs corrected reference data on every subsequent boot. */
 export function ensureSeeded(): Promise<void> {
-  if (!seedingPromise) {
-    seedingPromise = doSeed().then(() => syncLibraryIfNeeded());
+  const key = currentTrainingDbName() ?? "vshape";
+  let pending = seedingPromises.get(key);
+  if (!pending) {
+    pending = doSeed().then(() => syncLibraryIfNeeded());
+    seedingPromises.set(key, pending);
   }
-  return seedingPromise;
+  return pending;
 }
 
 async function doSeed(): Promise<void> {
@@ -88,13 +94,12 @@ async function doSeed(): Promise<void> {
 
 /**
  * Re-applies corrected exercise/program reference data on top of an existing install.
- * Reference tables (muscleGroups, equipment, exercises) are fully re-synced — they're
- * library data, never user-edited directly. workoutDayExercises are re-synced by id too:
- * today that's safe because the Plan editor only patches sets/rep-range/exerciseId on
- * these same seeded rows rather than creating new ones, so a version bump will currently
- * overwrite a manually-edited day. Acceptable for now (single user, pre-launch); if the
- * program editor becomes more independent, gate individual rows behind a "customized" flag
- * before re-syncing them.
+ * Reference tables (muscleGroups, equipment, exercises) are fully re-synced — they're library
+ * data, never user-edited directly, except for custom exercises, which are left alone.
+ *
+ * The seeded weekly program is only re-applied while the user still has the stock program.
+ * `planCustomizedAt` is stamped the moment they edit a day or apply a coach plan, and from
+ * then on a library bump never overwrites their own program.
  */
 async function syncLibraryIfNeeded(): Promise<void> {
   const settings = await db.appSettings.get(SETTINGS_ID);
@@ -102,6 +107,7 @@ async function syncLibraryIfNeeded(): Promise<void> {
   if (currentVersion >= LIBRARY_VERSION) return;
 
   const now = new Date().toISOString();
+  const planIsCustomized = settings?.planCustomizedAt != null;
 
   await db.transaction("rw", [db.muscleGroups, db.equipment, db.exercises, db.userEquipment, db.workoutDayExercises, db.appSettings], async () => {
     await db.muscleGroups.bulkPut(MUSCLE_GROUP_SEED);
@@ -113,7 +119,9 @@ async function syncLibraryIfNeeded(): Promise<void> {
       EXERCISE_SEED.map((e) => ({ ...e, createdAt: createdAtById.get(e.id) ?? now, updatedAt: now }))
     );
 
-    await db.workoutDayExercises.bulkPut(WORKOUT_DAY_EXERCISE_SEED);
+    if (!planIsCustomized) {
+      await db.workoutDayExercises.bulkPut(WORKOUT_DAY_EXERCISE_SEED);
+    }
 
     const existingEquipmentKeys = new Set((await db.userEquipment.toArray()).map((u) => u.equipmentKey));
     const newEquipment = EQUIPMENT_SEED.filter((eq) => !existingEquipmentKeys.has(eq.key));

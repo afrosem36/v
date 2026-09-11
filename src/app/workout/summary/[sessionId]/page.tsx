@@ -85,9 +85,10 @@ export default function WorkoutSummaryPage({ params }: { params: Promise<{ sessi
 
   // Auto-save shortly after typing stops, so a note is never sitting unsaved waiting for a blur
   // event that might not fire (e.g. navigating away by tapping a link rather than tabbing out).
+  // "pending" is set by the change handler, not here — setting it in the effect body would
+  // cascade an extra render on every keystroke.
   useEffect(() => {
     if (!noteSeeded) return;
-    setSaveState("pending");
     const timeout = setTimeout(async () => {
       await updateSessionNotes(sessionId, noteText);
       setSaveState("saved");
@@ -216,7 +217,10 @@ export default function WorkoutSummaryPage({ params }: { params: Promise<{ sessi
         </div>
         <textarea
           value={noteText}
-          onChange={(e) => setNoteText(e.target.value)}
+          onChange={(e) => {
+            setNoteText(e.target.value);
+            setSaveState("pending");
+          }}
           onBlur={() => updateSessionNotes(sessionId, noteText)}
           placeholder="e.g. bench felt heavy but incline felt easy…"
           rows={3}

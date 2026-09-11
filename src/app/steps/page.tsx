@@ -75,7 +75,14 @@ export default function StepsPage() {
       <Card>
         <CardLabel>Today</CardLabel>
         <div className="mt-2">
-          <NumberStepper value={data.todaySteps} onChange={saveToday} step={100} decimals={0} quickSteps={[500, 1000, 2000]} />
+          <NumberStepper
+            value={data.todaySteps}
+            onChange={saveToday}
+            step={500}
+            max={200_000}
+            decimals={0}
+            quickSteps={[1000, 2000, 5000]}
+          />
         </div>
         <div className="mt-3">
           <div className="mb-1 flex justify-between text-xs text-text-muted">
@@ -118,7 +125,7 @@ export default function StepsPage() {
 
       <BottomSheet open={editDate != null} onClose={() => setEditDate(null)} title={editDate ? formatShortDate(editDate) : ""}>
         <div className="pb-4">
-          <NumberStepper value={editValue} onChange={setEditValue} step={100} decimals={0} quickSteps={[500, 1000]} />
+          <NumberStepper value={editValue} onChange={setEditValue} step={500} max={200_000} decimals={0} quickSteps={[1000, 2000, 5000]} />
           <Button fullWidth size="lg" className="mt-4" onClick={saveEdit}>
             Save
           </Button>

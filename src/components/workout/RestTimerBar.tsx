@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { Pause, Play, SkipForward } from "lucide-react";
 import { useActiveWorkoutStore } from "@/store/active-workout-store";
 import { vibrate } from "@/lib/pwa/wake-lock";
+import { useNow } from "@/lib/hooks/useNow";
 
 function formatMMSS(totalSeconds: number): string {
   const s = Math.max(0, Math.round(totalSeconds));
@@ -19,26 +20,20 @@ export function RestTimerBar() {
   const adjustRest = useActiveWorkoutStore((s) => s.adjustRest);
   const skipRest = useActiveWorkoutStore((s) => s.skipRest);
 
-  const [, forceTick] = useState(0);
-  const firedComplete = useRef(false);
+  const now = useNow(250);
 
+  const remaining =
+    restTimer.running && restTimer.endAt != null && now != null ? (restTimer.endAt - now) / 1000 : restTimer.totalSec;
+  const done = remaining <= 0;
+  const shouldBuzz = done && restTimer.running;
+
+  // Buzzes once on the transition into "rest complete" — `shouldBuzz` only flips true once per
+  // rest period, so the effect doesn't need a ref to de-duplicate itself.
   useEffect(() => {
-    if (!restTimer.running) return;
-    const id = setInterval(() => forceTick((n) => n + 1), 250);
-    return () => clearInterval(id);
-  }, [restTimer.running]);
+    if (shouldBuzz) vibrate([200, 100, 200]);
+  }, [shouldBuzz]);
 
   if (restTimer.totalSec <= 0 && !restTimer.running) return null;
-
-  const remaining = restTimer.running && restTimer.endAt != null ? (restTimer.endAt - Date.now()) / 1000 : restTimer.totalSec;
-
-  if (remaining <= 0 && restTimer.running && !firedComplete.current) {
-    firedComplete.current = true;
-    vibrate([200, 100, 200]);
-  }
-  if (remaining > 0) firedComplete.current = false;
-
-  const done = remaining <= 0;
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 backdrop-blur pb-[var(--safe-bottom)]">

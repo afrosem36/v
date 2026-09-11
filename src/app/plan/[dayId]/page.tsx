@@ -3,7 +3,7 @@
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, ArrowRightLeft, Trash2, Plus } from "lucide-react";
+import { ChevronLeft, ArrowRightLeft, Trash2, Plus, ArrowUp, ArrowDown } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { BottomSheet } from "@/components/ui/BottomSheet";
@@ -16,7 +16,12 @@ import {
   removeWorkoutDayExercise,
   setDayRestStatus,
   getActiveSession,
-  startSession,
+  getSessionSets,
+  startWorkoutForDay,
+  completeSession,
+  abandonSession,
+  reorderWorkoutDayExercise,
+  renameWorkoutDay,
 } from "@/lib/db/repo/workouts";
 import { getExercisesByIds, getExercisesByPrimaryMuscle, getAllExercises } from "@/lib/db/repo/exercises";
 import type { Exercise, WorkoutDayExercise, MuscleGroupKey } from "@/types/domain";
@@ -47,8 +52,10 @@ function useDayDetail(dayId: string) {
     const dayExercises = await getWorkoutDayExercises(dayId);
     const exercises = await getExercisesByIds(dayExercises.map((d) => d.exerciseId));
     const activeSession = await getActiveSession();
+    const activeSetCount = activeSession ? (await getSessionSets(activeSession.id)).length : 0;
     return {
       activeSession,
+      activeSetCount,
       day,
       rows: dayExercises.map((de) => ({ de, exercise: exercises.find((e) => e.id === de.exerciseId)! })).filter((r) => r.exercise),
     };
@@ -65,15 +72,40 @@ export default function PlanDayPage({ params }: { params: Promise<{ dayId: strin
 
   if (!data) return <div className="p-5 pt-[calc(1.5rem+var(--safe-top))] text-sm text-text-muted">Loading…</div>;
 
+  /**
+   * Starts THIS day's routine today, whatever weekday it is in the plan. An unfinished session
+   * used to silently swallow the tap and reopen itself — which is how picking Wednesday landed
+   * you back in Tuesday's workout.
+   */
   async function handleStart() {
     if (starting || !data) return;
-    setStarting(true);
-    if (data.activeSession) {
-      router.push("/workout/active");
+    const { activeSession, activeSetCount, day } = data;
+
+    if (activeSession && activeSession.workoutDayId === day.id) {
+      router.push(`/workout/active?session=${activeSession.id}`);
       return;
     }
-    const session = await startSession(data.day.id, data.day.label, null);
-    router.push(`/workout/active?session=${session.id}`);
+
+    if (activeSession) {
+      const resumeOther = confirm(
+        `"${activeSession.label}" is still open with ${activeSetCount} set(s) logged.\n\n` +
+          `OK — go back to that one.\nCancel — close it and start "${day.label}" instead.`
+      );
+      if (resumeOther) {
+        router.push(`/workout/active?session=${activeSession.id}`);
+        return;
+      }
+      if (activeSetCount > 0) await completeSession(activeSession.id);
+      else await abandonSession(activeSession.id);
+    }
+
+    setStarting(true);
+    try {
+      const session = await startWorkoutForDay(day, { timeBudgetMinutes: null });
+      router.push(`/workout/active?session=${session.id}`);
+    } finally {
+      setStarting(false);
+    }
   }
 
   async function handleRemove(id: string) {
@@ -88,31 +120,52 @@ export default function PlanDayPage({ params }: { params: Promise<{ dayId: strin
         Back
       </button>
 
-      <div className="flex items-center justify-between">
-        <div className="text-2xl font-bold tracking-tight">{data.day.label}</div>
+      <div className="flex items-start justify-between gap-3">
+        <input
+          defaultValue={data.day.label}
+          onBlur={(e) => renameWorkoutDay(dayId, e.target.value)}
+          aria-label="Workout name"
+          className="min-w-0 flex-1 bg-transparent text-2xl font-bold tracking-tight outline-none focus:border-b focus:border-accent"
+        />
         <button
           onClick={() => setDayRestStatus(dayId, !data.day.isRestDay)}
-          className="rounded-lg bg-surface-2 border border-border px-3 py-1.5 text-xs font-medium text-text-muted active:brightness-90"
+          className="shrink-0 rounded-lg bg-surface-2 border border-border px-3 py-1.5 text-xs font-medium text-text-muted active:brightness-90"
         >
-          {data.day.isRestDay ? "Make it an active day" : "Mark as rest day"}
+          {data.day.isRestDay ? "Make it active" : "Mark as rest"}
         </button>
       </div>
 
       {data.day.isRestDay ? (
         <p className="text-sm text-text-muted">
-          Rest day — no exercises scheduled. Tap "Make it an active day" above if you want an optional session here (e.g. a light
+          Rest day — no exercises scheduled. Tap &quot;Make it active&quot; above if you want an optional session here (e.g. a light
           Sunday task) instead of full rest.
         </p>
       ) : (
         <div className="flex flex-col gap-3">
           <Button size="lg" fullWidth disabled={starting} onClick={handleStart}>
-            {data.activeSession ? "Resume Workout in Progress" : "Start This Workout"}
+            {data.activeSession?.workoutDayId === data.day.id ? "Resume Workout in Progress" : "Start This Workout"}
           </Button>
-          {data.rows.map(({ de, exercise }) => (
+          {data.rows.map(({ de, exercise }, index) => (
             <Card key={de.id}>
               <div className="mb-3 flex items-center justify-between">
                 <div className="font-semibold">{exercise.name}</div>
                 <div className="flex gap-2">
+                  <button
+                    onClick={() => reorderWorkoutDayExercise(de.id, -1)}
+                    disabled={index === 0}
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 border border-border active:brightness-90 disabled:opacity-30"
+                    aria-label="Move up"
+                  >
+                    <ArrowUp size={14} />
+                  </button>
+                  <button
+                    onClick={() => reorderWorkoutDayExercise(de.id, 1)}
+                    disabled={index === data.rows.length - 1}
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 border border-border active:brightness-90 disabled:opacity-30"
+                    aria-label="Move down"
+                  >
+                    <ArrowDown size={14} />
+                  </button>
                   <button
                     onClick={() => setSwapFor({ de, exercise })}
                     className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 border border-border active:brightness-90"

@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/Button";
 import { CompletedSetRow, PendingSetRow } from "@/components/workout/SetRow";
 import { ExerciseInfoSheet } from "@/components/workout/ExerciseInfoSheet";
 import { SwapExerciseSheet } from "@/components/workout/SwapExerciseSheet";
+import { EditSetSheet } from "@/components/workout/EditSetSheet";
 import { useActiveWorkoutStore } from "@/store/active-workout-store";
 import { formatLastPerformance } from "@/lib/utils/workout-format";
 import { totalLoadForSet } from "@/lib/engine/weight-math";
 import type { SessionExerciseEntry } from "@/lib/hooks/useActiveWorkoutSession";
+import type { ExerciseSet } from "@/types/domain";
 
 const MUSCLE_LABELS: Record<string, string> = {
   lateral_delts: "Lateral Delts",
@@ -51,6 +53,7 @@ interface ExercisePanelProps {
 export function ExercisePanel({ entry, sessionId, isLast, onNext, onSwap }: ExercisePanelProps) {
   const [infoOpen, setInfoOpen] = useState(false);
   const [swapOpen, setSwapOpen] = useState(false);
+  const [editingSet, setEditingSet] = useState<ExerciseSet | null>(null);
   const startRest = useActiveWorkoutStore((s) => s.startRest);
 
   const { exercise, dayExercise, loggedSets, lastWorkingSets, prescription, weightStep, isComplete, wasSubstituted, originalExercise } = entry;
@@ -122,7 +125,7 @@ export function ExercisePanel({ entry, sessionId, isLast, onNext, onSwap }: Exer
 
       <div className="flex flex-col gap-2">
         {loggedSets.map((s) => (
-          <CompletedSetRow key={s.id} setNumber={s.setNumber} set={s} />
+          <CompletedSetRow key={s.id} setNumber={s.setNumber} set={s} onEdit={setEditingSet} />
         ))}
 
         {!isComplete && (
@@ -165,6 +168,7 @@ export function ExercisePanel({ entry, sessionId, isLast, onNext, onSwap }: Exer
         </Card>
       )}
 
+      <EditSetSheet set={editingSet} exercise={exercise} onClose={() => setEditingSet(null)} />
       <ExerciseInfoSheet exercise={infoOpen ? exercise : null} onClose={() => setInfoOpen(false)} />
       <SwapExerciseSheet
         open={swapOpen}

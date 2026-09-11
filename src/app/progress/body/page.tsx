@@ -144,7 +144,7 @@ export default function BodyMetricsPage() {
       </Card>
 
       <p className="px-0.5 text-xs text-text-muted">
-        BMI and calorie figures are rough estimates for reference, not medical measurements — they don't account for muscle mass,
+        BMI and calorie figures are rough estimates for reference, not medical measurements — they don&apos;t account for muscle mass,
         body composition, or workout intensity.
       </p>
 

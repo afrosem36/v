@@ -33,6 +33,59 @@ export async function evaluateAndSavePRs(exerciseId: string, sessionId: string, 
   return results.filter((r) => r.celebrate);
 }
 
+/**
+ * Replays every completed session for one exercise, oldest first, rebuilding its records from
+ * nothing. Editing or deleting a logged set can only make records go down, and no incremental
+ * update can do that correctly — the record it beat is long gone. Cheap enough to just redo:
+ * one exercise's history is tens of sets, not thousands.
+ */
+export async function rebuildPRsForExercise(exerciseId: string): Promise<void> {
+  const [sets, completedSessions] = await Promise.all([
+    db.exerciseSets.where("exerciseId").equals(exerciseId).toArray(),
+    db.workoutSessions.where("status").equals("completed").toArray(),
+  ]);
+  const completedIds = new Set(completedSessions.map((s) => s.id));
+
+  const bySession = new Map<string, ExerciseSet[]>();
+  for (const set of sets) {
+    if (set.isWarmup || !completedIds.has(set.sessionId)) continue;
+    const bucket = bySession.get(set.sessionId) ?? [];
+    bucket.push(set);
+    bySession.set(set.sessionId, bucket);
+  }
+
+  const ordered = [...bySession.entries()].sort(
+    (a, b) => earliestCompletedAt(a[1]).localeCompare(earliestCompletedAt(b[1]))
+  );
+
+  await db.personalRecords.where("exerciseId").equals(exerciseId).delete();
+
+  const accumulated = new Map<PRType, PersonalRecord>();
+  for (const [sessionId, sessionSets] of ordered) {
+    const results = detectNewPRs(sessionSets, [...accumulated.values()]);
+    for (const r of results) {
+      if (!r.isNewPR) continue;
+      accumulated.set(r.type, {
+        id: accumulated.get(r.type)?.id ?? newId("pr"),
+        exerciseId,
+        type: r.type,
+        value: r.value,
+        weightKg: r.weightKg,
+        reps: r.reps,
+        achievedAt: earliestCompletedAt(sessionSets),
+        sessionId,
+        isBaseline: !r.celebrate,
+      });
+    }
+  }
+
+  if (accumulated.size > 0) await db.personalRecords.bulkPut([...accumulated.values()]);
+}
+
+function earliestCompletedAt(sets: ExerciseSet[]): string {
+  return sets.reduce((min, s) => (s.completedAt < min ? s.completedAt : min), sets[0].completedAt);
+}
+
 export async function getAllPRsByType(type: PRType): Promise<PersonalRecord[]> {
   return db.personalRecords.where("type").equals(type).toArray();
 }

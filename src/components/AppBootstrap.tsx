@@ -1,26 +1,35 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ensureSeeded } from "@/lib/db/seed";
+import { useEffect } from "react";
+import { AuthGate } from "@/lib/auth/AuthProvider";
+import { AuthScreen } from "@/components/auth/AuthScreen";
+import { OnboardingGate } from "@/components/OnboardingGate";
 import { registerServiceWorker } from "@/lib/pwa/register-sw";
 import { requestPersistentStorage } from "@/lib/pwa/persist-storage";
+import { finalizeStaleSessions } from "@/lib/db/repo/workouts";
 
 export function AppBootstrap({ children }: { children: React.ReactNode }) {
-  const [ready, setReady] = useState(false);
-
   useEffect(() => {
     registerServiceWorker();
     requestPersistentStorage();
-    ensureSeeded().then(() => setReady(true));
   }, []);
 
-  if (!ready) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-bg">
-        <div className="text-sm font-medium tracking-wide text-text-muted">Loading…</div>
-      </div>
-    );
-  }
+  return (
+    <AuthGate renderSignedOut={({ signIn, signUp }) => <AuthScreen signIn={signIn} signUp={signUp} />}>
+      <SessionHousekeeping />
+      <OnboardingGate>{children}</OnboardingGate>
+    </AuthGate>
+  );
+}
 
-  return <>{children}</>;
+/**
+ * Closes out workouts left open on an earlier day, once per app start. Without it a session
+ * opened on Tuesday and never finished stays active forever and swallows every later attempt to
+ * start a different day's workout.
+ */
+function SessionHousekeeping() {
+  useEffect(() => {
+    finalizeStaleSessions();
+  }, []);
+  return null;
 }

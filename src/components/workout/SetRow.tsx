@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, TriangleAlert, Sparkles } from "lucide-react";
+import { Check, TriangleAlert, Sparkles, Pencil } from "lucide-react";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Button } from "@/components/ui/Button";
@@ -16,12 +16,15 @@ import type { Exercise, ExerciseSet } from "@/types/domain";
 interface CompletedSetRowProps {
   setNumber: number;
   set: ExerciseSet;
+  /** Pass to make the row tappable for corrections. Omit for read-only contexts. */
+  onEdit?: (set: ExerciseSet) => void;
 }
 
-export function CompletedSetRow({ setNumber, set }: CompletedSetRowProps) {
+export function CompletedSetRow({ setNumber, set, onEdit }: CompletedSetRowProps) {
   const weightLabel = describeWeight(set);
-  return (
-    <div className="flex items-center justify-between rounded-xl bg-surface-2/60 px-4 py-3 text-sm">
+
+  const content = (
+    <>
       <div className="flex items-center gap-2">
         <Check size={16} className="text-success" />
         <span className="font-medium">Set {setNumber}</span>
@@ -33,8 +36,24 @@ export function CompletedSetRow({ setNumber, set }: CompletedSetRowProps) {
         </span>
         {set.rir != null && <span>RIR {rirLabel(set.rir)}</span>}
         {set.painFlag && <TriangleAlert size={15} className="text-danger" />}
+        {onEdit && <Pencil size={14} className="text-text-faint" />}
       </div>
-    </div>
+    </>
+  );
+
+  if (!onEdit) {
+    return <div className="flex items-center justify-between rounded-xl bg-surface-2/60 px-4 py-3 text-sm">{content}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onEdit(set)}
+      aria-label={`Edit set ${setNumber}`}
+      className="flex w-full items-center justify-between rounded-xl bg-surface-2/60 px-4 py-3 text-left text-sm active:brightness-90"
+    >
+      {content}
+    </button>
   );
 }
 

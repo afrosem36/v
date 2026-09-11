@@ -1,11 +1,13 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Pencil } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { CompletedSetRow } from "@/components/workout/SetRow";
+import { EditSetSheet } from "@/components/workout/EditSetSheet";
+import type { Exercise, ExerciseSet } from "@/types/domain";
 import { getSession, getSessionSets } from "@/lib/db/repo/workouts";
 import { getExercisesByIds } from "@/lib/db/repo/exercises";
 import { getPRsForSession } from "@/lib/db/repo/records";
@@ -19,6 +21,7 @@ import { getSettings } from "@/lib/db/repo/settings";
 export default function HistoryDetailPage({ params }: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = use(params);
   const router = useRouter();
+  const [editing, setEditing] = useState<{ set: ExerciseSet; exercise: Exercise } | null>(null);
 
   const data = useLiveQuery(async () => {
     const session = await getSession(sessionId);
@@ -99,18 +102,25 @@ export default function HistoryDetailPage({ params }: { params: Promise<{ sessio
         </Card>
       )}
 
+      <div className="flex items-center gap-1.5 text-xs text-text-muted">
+        <Pencil size={12} />
+        Tap any set to correct the weight or reps you logged.
+      </div>
+
       <div className="flex flex-col gap-3">
         {byExercise.map(({ exercise, sets }) => (
           <Card key={exercise.id}>
             <div className="mb-2 font-semibold">{exercise.name}</div>
             <div className="flex flex-col gap-1.5">
               {sets.map((s) => (
-                <CompletedSetRow key={s.id} setNumber={s.setNumber} set={s} />
+                <CompletedSetRow key={s.id} setNumber={s.setNumber} set={s} onEdit={(set) => setEditing({ set, exercise })} />
               ))}
             </div>
           </Card>
         ))}
       </div>
+
+      <EditSetSheet set={editing?.set ?? null} exercise={editing?.exercise} onClose={() => setEditing(null)} />
     </div>
   );
 }

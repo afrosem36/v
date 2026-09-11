@@ -3,8 +3,10 @@ import { getCompletedSessions, getSessionSets } from "@/lib/db/repo/workouts";
 import { getExercisesByIds } from "@/lib/db/repo/exercises";
 import { totalLoadForSet, displayWeightForSet } from "@/lib/engine/weight-math";
 import { estimateCaloriesBurned } from "@/lib/engine/body-metrics";
+import { estimate1RM } from "@/lib/engine/pr";
 import { dateStr } from "@/lib/utils/date";
 import { startOfWeek, addWeeks, isWithinInterval, endOfWeek, format } from "date-fns";
+import type { MuscleGroupKey } from "@/types/domain";
 
 export interface WeeklyVolume {
   weekStart: string;
@@ -109,6 +111,134 @@ export async function getRecentSessionsSummary(limit = 3): Promise<RecentSession
   }
 
   return results;
+}
+
+export interface HeatmapDay {
+  date: string;
+  /** Minutes trained that day. 0 means no session. */
+  minutes: number;
+  sets: number;
+}
+
+/** GitHub-style activity grid: one entry per day for the last `days` days, oldest first. */
+export async function getTrainingHeatmap(days = 364): Promise<HeatmapDay[]> {
+  const sessions = await getCompletedSessions(1000);
+  const allSets = await db.exerciseSets.toArray();
+
+  const setCountBySession = new Map<string, number>();
+  for (const s of allSets) setCountBySession.set(s.sessionId, (setCountBySession.get(s.sessionId) ?? 0) + 1);
+
+  const byDate = new Map<string, HeatmapDay>();
+  for (const session of sessions) {
+    const date = session.startedAt.slice(0, 10);
+    const minutes = session.completedAt
+      ? Math.max(0, Math.round((new Date(session.completedAt).getTime() - new Date(session.startedAt).getTime()) / 60000))
+      : 0;
+    const existing = byDate.get(date) ?? { date, minutes: 0, sets: 0 };
+    existing.minutes += minutes;
+    existing.sets += setCountBySession.get(session.id) ?? 0;
+    byDate.set(date, existing);
+  }
+
+  const result: HeatmapDay[] = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const date = dateStr(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i));
+    result.push(byDate.get(date) ?? { date, minutes: 0, sets: 0 });
+  }
+  return result;
+}
+
+export interface MuscleVolume {
+  muscle: MuscleGroupKey;
+  sets: number;
+  volumeKg: number;
+  lastTrained: string | null;
+}
+
+/**
+ * Working sets and tonnage per muscle over a window. Assistance work counts at half a set,
+ * which is the convention most volume guidance is written against.
+ */
+export async function getMuscleBreakdown(windowDays: number): Promise<MuscleVolume[]> {
+  const cutoff = dateStr(new Date(Date.now() - windowDays * 86_400_000));
+  const [sessions, allSets, exercises] = await Promise.all([
+    getCompletedSessions(500),
+    db.exerciseSets.toArray(),
+    db.exercises.toArray(),
+  ]);
+
+  const completedIds = new Set(sessions.filter((s) => s.startedAt.slice(0, 10) >= cutoff).map((s) => s.id));
+  const exerciseById = new Map(exercises.map((e) => [e.id, e]));
+  const totals = new Map<MuscleGroupKey, MuscleVolume>();
+
+  const bump = (muscle: MuscleGroupKey, sets: number, volume: number, date: string) => {
+    const entry = totals.get(muscle) ?? { muscle, sets: 0, volumeKg: 0, lastTrained: null };
+    entry.sets += sets;
+    entry.volumeKg += volume;
+    if (!entry.lastTrained || date > entry.lastTrained) entry.lastTrained = date;
+    totals.set(muscle, entry);
+  };
+
+  for (const set of allSets) {
+    if (set.isWarmup || !completedIds.has(set.sessionId)) continue;
+    const exercise = exerciseById.get(set.exerciseId);
+    if (!exercise) continue;
+    const volume = totalLoadForSet(set) * set.reps;
+    const date = set.completedAt.slice(0, 10);
+    bump(exercise.primaryMuscle, 1, volume, date);
+    for (const secondary of exercise.secondaryMuscles) bump(secondary, 0.5, volume * 0.5, date);
+  }
+
+  return [...totals.values()]
+    .map((t) => ({ ...t, sets: Math.round(t.sets * 10) / 10, volumeKg: Math.round(t.volumeKg) }))
+    .sort((a, b) => b.sets - a.sets);
+}
+
+export interface ExerciseStrength {
+  exerciseId: string;
+  name: string;
+  bestWeightKg: number;
+  bestReps: number;
+  estimated1RM: number;
+  lastPerformed: string;
+}
+
+/** Best estimated 1RM per exercise, from the single best eligible set (Epley is unreliable past 12 reps). */
+export async function getStrengthProfile(): Promise<ExerciseStrength[]> {
+  const [allSets, exercises, sessions] = await Promise.all([
+    db.exerciseSets.toArray(),
+    db.exercises.toArray(),
+    getCompletedSessions(500),
+  ]);
+  const completedIds = new Set(sessions.map((s) => s.id));
+  const exerciseById = new Map(exercises.map((e) => [e.id, e]));
+
+  const best = new Map<string, ExerciseStrength>();
+  for (const set of allSets) {
+    if (set.isWarmup || !completedIds.has(set.sessionId) || set.reps > 12) continue;
+    const exercise = exerciseById.get(set.exerciseId);
+    if (!exercise || exercise.loadType === "bodyweight" || exercise.loadType === "cardio") continue;
+
+    const weight = displayWeightForSet(set);
+    if (weight <= 0) continue;
+    const oneRm = Math.round(estimate1RM(weight, set.reps) * 10) / 10;
+    const current = best.get(set.exerciseId);
+    if (current && current.estimated1RM >= oneRm) {
+      if (set.completedAt > current.lastPerformed) current.lastPerformed = set.completedAt;
+      continue;
+    }
+    best.set(set.exerciseId, {
+      exerciseId: set.exerciseId,
+      name: exercise.name,
+      bestWeightKg: weight,
+      bestReps: set.reps,
+      estimated1RM: oneRm,
+      lastPerformed: current && current.lastPerformed > set.completedAt ? current.lastPerformed : set.completedAt,
+    });
+  }
+
+  return [...best.values()].sort((a, b) => b.estimated1RM - a.estimated1RM);
 }
 
 export interface WeeklyGymStats {

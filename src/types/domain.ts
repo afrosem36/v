@@ -64,6 +64,8 @@ export type LoadType = "dumbbell_each" | "barbell" | "machine_stack" | "bodyweig
 export interface Exercise {
   id: Id;
   name: string;
+  /** True for exercises the user (or an imported coach plan) created — never overwritten by library syncs. */
+  isCustom?: boolean;
   primaryMuscle: MuscleGroupKey;
   secondaryMuscles: MuscleGroupKey[];
   equipment: EquipmentKey[];
@@ -146,6 +148,8 @@ export interface WorkoutSession {
   /** short workout mode target, minutes */
   timeBudgetMinutes: number | null;
   notes: string | null;
+  /** yyyy-mm-dd the session was started for. Older rows predate this field — fall back to startedAt. */
+  scheduledDate?: string;
 }
 
 export type WeightEntryMode = "dumbbell_each" | "barbell_total" | "machine" | "bodyweight" | "assisted";
@@ -249,4 +253,64 @@ export interface AppSettings {
   libraryVersion?: number;
   heightCm: number | null;
   goalWeightKg: number | null;
+  /**
+   * Set the moment the user edits their program or applies a coach plan. Once set, library
+   * syncs stop re-applying the seeded weekly program over the top of their own.
+   */
+  planCustomizedAt?: string | null;
+  /**
+   * Null until the account has a real program — a coach plan imported from ChatGPT, or (for
+   * accounts that predate this) any logged training history. The app is gated on it.
+   */
+  onboardingCompletedAt?: string | null;
+}
+
+// ---------------- Scheduling ----------------
+
+/**
+ * Pins a specific calendar date to a specific routine (or to rest, when workoutDayId is null),
+ * without editing the weekly plan. This is how a missed Tuesday gets trained on Wednesday.
+ */
+export interface ScheduleOverride {
+  id: Id;
+  date: string; // yyyy-mm-dd, unique
+  workoutDayId: Id | null;
+  createdAt: string;
+}
+
+export interface ExerciseNote {
+  id: Id;
+  exerciseId: Id; // unique
+  text: string;
+  updatedAt: string;
+}
+
+// ---------------- Coach / goals ----------------
+
+export type TrainingGoal = "vshape" | "lean" | "bulk" | "strength" | "recomp" | "general";
+
+export type CoachPlanStatus = "imported" | "applied" | "discarded";
+
+/** A training plan pasted back from ChatGPT, after local validation and auto-improvement. */
+export interface CoachPlanRecord {
+  id: Id;
+  createdAt: string;
+  name: string;
+  summary: string;
+  goal: TrainingGoal;
+  weeksCovered: number;
+  /** The validated + improved bundle, serialized. Shape: CoachPlanBundle in lib/coach/contract.ts */
+  bundleJson: string;
+  status: CoachPlanStatus;
+  appliedAt: string | null;
+  improvements: string[];
+  warnings: string[];
+}
+
+/** Full copy of the weekly plan taken immediately before a coach plan is applied, so it can be reverted. */
+export interface PlanSnapshot {
+  id: Id;
+  createdAt: string;
+  label: string;
+  payloadJson: string;
 }

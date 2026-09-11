@@ -28,7 +28,7 @@ export default function HistoryPage() {
       <div className="text-2xl font-bold tracking-tight">History</div>
 
       {sessions && sessions.length === 0 && (
-        <p className="text-sm text-text-muted">No completed workouts yet. Once you finish one, it'll show up here.</p>
+        <p className="text-sm text-text-muted">No completed workouts yet. Once you finish one, it&apos;ll show up here.</p>
       )}
 
       <div className="flex flex-col gap-2">

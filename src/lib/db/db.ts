@@ -15,9 +15,20 @@ import type {
   DailySteps,
   ProgressPhoto,
   AppSettings,
+  ScheduleOverride,
+  ExerciseNote,
+  CoachPlanRecord,
+  PlanSnapshot,
 } from "@/types/domain";
 
-class VshapeDB extends Dexie {
+/**
+ * Every account gets its own IndexedDB database, so two people sharing a phone never see
+ * each other's training. The first account keeps the original "vshape" name, which is what
+ * makes pre-accounts data carry over untouched.
+ */
+export const LEGACY_DB_NAME = "vshape";
+
+export class VshapeDB extends Dexie {
   muscleGroups!: EntityTable<MuscleGroup, "id">;
   equipment!: EntityTable<Equipment, "id">;
   exercises!: EntityTable<Exercise, "id">;
@@ -33,9 +44,13 @@ class VshapeDB extends Dexie {
   dailySteps!: EntityTable<DailySteps, "id">;
   progressPhotos!: EntityTable<ProgressPhoto, "id">;
   appSettings!: EntityTable<AppSettings, "id">;
+  scheduleOverrides!: EntityTable<ScheduleOverride, "id">;
+  exerciseNotes!: EntityTable<ExerciseNote, "id">;
+  coachPlans!: EntityTable<CoachPlanRecord, "id">;
+  planSnapshots!: EntityTable<PlanSnapshot, "id">;
 
-  constructor() {
-    super("vshape");
+  constructor(name: string) {
+    super(name);
     this.version(1).stores({
       muscleGroups: "id, key",
       equipment: "id, key",
@@ -60,7 +75,52 @@ class VshapeDB extends Dexie {
       exerciseSets: "id, sessionId, exerciseId, [exerciseId+completedAt], [sessionId+exerciseId], completedAt",
       personalRecords: "id, exerciseId, sessionId, type, [exerciseId+type]",
     });
+    // v3: per-date schedule overrides (train any day's routine on any date), per-exercise notes,
+    // and storage for AI coach plans + the plan snapshots that make applying one revertible.
+    this.version(3).stores({
+      scheduleOverrides: "id, &date",
+      exerciseNotes: "id, &exerciseId",
+      coachPlans: "id, createdAt, status",
+      planSnapshots: "id, createdAt",
+    });
   }
 }
 
-export const db = new VshapeDB();
+let instance: VshapeDB | null = null;
+
+/** Opens (or returns) the training database for a given account. Closes the previous one on switch. */
+export function openTrainingDb(name: string): VshapeDB {
+  if (instance && instance.name === name) return instance;
+  if (instance) instance.close();
+  instance = new VshapeDB(name);
+  return instance;
+}
+
+export function currentTrainingDbName(): string | null {
+  return instance?.name ?? null;
+}
+
+/** Dexie.delete() blocks while a connection is open, so anything deleting a database closes it first. */
+export function closeTrainingDb(): void {
+  instance?.close();
+  instance = null;
+}
+
+/**
+ * The single `db` every repo imports. It forwards to whichever account's database is open, so
+ * modules can keep a static import while the underlying database is chosen at login time.
+ * Nothing may read `db` before AppBootstrap has resolved an account — the fallback to the
+ * legacy name exists only so a stray early read can't crash the app.
+ */
+export const db = new Proxy({} as VshapeDB, {
+  get(_target, prop) {
+    const active = instance ?? openTrainingDb(LEGACY_DB_NAME);
+    // Deliberately not forwarding the receiver: Dexie's getters must resolve `this` to the real
+    // instance, not to this proxy.
+    const value = Reflect.get(active, prop);
+    return typeof value === "function" ? value.bind(active) : value;
+  },
+  has(_target, prop) {
+    return Reflect.has(instance ?? openTrainingDb(LEGACY_DB_NAME), prop);
+  },
+});

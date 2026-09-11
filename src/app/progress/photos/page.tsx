@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ChevronLeft, Plus, Trash2 } from "lucide-react";
-import { Card } from "@/components/ui/Card";
 import { BottomSheet } from "@/components/ui/BottomSheet";
 import { addProgressPhoto, getAllProgressPhotos, deleteProgressPhoto } from "@/lib/db/repo/body";
 import { todayStr, formatFriendlyDate } from "@/lib/utils/date";
@@ -16,17 +15,27 @@ const ANGLES: { key: PhotoAngle; label: string }[] = [
   { key: "back", label: "Back" },
 ];
 
-function PhotoThumb({ photo, onOpen }: { photo: ProgressPhoto; onOpen: () => void }) {
-  const [url, setUrl] = useState<string | null>(null);
-
+/**
+ * Object URLs are created in a memo and revoked on cleanup rather than pushed through state —
+ * the state round-trip cost an extra render per photo and left the grid blank on first paint.
+ */
+function useObjectUrl(blob: Blob | null | undefined): string | null {
+  const url = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob]);
   useEffect(() => {
-    const objectUrl = URL.createObjectURL(photo.blob);
-    setUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [photo.blob]);
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [url]);
+  return url;
+}
+
+function PhotoThumb({ photo, onOpen }: { photo: ProgressPhoto; onOpen: () => void }) {
+  const url = useObjectUrl(photo.blob);
 
   return (
     <button onClick={onOpen} className="aspect-square overflow-hidden rounded-xl bg-surface-2">
+      {/* next/image can't process blob: URLs — these photos only ever exist in this browser. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       {url && <img src={url} alt={`${photo.angle} ${photo.date}`} className="h-full w-full object-cover" />}
     </button>
   );
@@ -37,14 +46,7 @@ export default function PhotosPage() {
   const photos = useLiveQuery(() => getAllProgressPhotos(), []);
   const fileInputs = useRef<Record<PhotoAngle, HTMLInputElement | null>>({ front: null, side: null, back: null });
   const [viewing, setViewing] = useState<ProgressPhoto | null>(null);
-  const [viewUrl, setViewUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!viewing) return;
-    const url = URL.createObjectURL(viewing.blob);
-    setViewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [viewing]);
+  const viewUrl = useObjectUrl(viewing?.blob);
 
   async function handleFile(angle: PhotoAngle, file: File | undefined) {
     if (!file) return;
@@ -99,6 +101,7 @@ export default function PhotosPage() {
       <BottomSheet open={viewing != null} onClose={() => setViewing(null)} title={viewing ? formatFriendlyDate(viewing.date) : ""}>
         {viewing && viewUrl && (
           <div className="pb-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={viewUrl} alt={viewing.angle} className="w-full rounded-xl" />
             <div className="mt-2 flex items-center justify-between text-sm text-text-muted">
               <span className="capitalize">{viewing.angle}</span>

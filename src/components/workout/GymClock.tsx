@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Timer } from "lucide-react";
+import { useNow } from "@/lib/hooks/useNow";
 
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -15,14 +15,8 @@ function formatElapsed(ms: number): string {
 
 /** Live "time spent in the gym" clock — ticks from when the session was started (clock-in). */
 export function GymClock({ startedAt }: { startedAt: string }) {
-  const [, forceTick] = useState(0);
-
-  useEffect(() => {
-    const id = setInterval(() => forceTick((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const elapsedMs = Date.now() - new Date(startedAt).getTime();
+  const now = useNow(1000);
+  const elapsedMs = now != null ? now - new Date(startedAt).getTime() : 0;
 
   return (
     <div className="flex items-center gap-1.5 text-sm font-semibold tabular-nums text-accent">
