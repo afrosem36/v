@@ -2,8 +2,10 @@
 
 import { usePathname } from "next/navigation";
 import { BottomNav } from "./BottomNav";
+import { InstallPrompt } from "./InstallPrompt";
 
-// Active workout logging is full-screen and focused — no bottom nav to distract mid-set.
+// Active workout logging is full-screen and focused — no bottom nav (or install nudge) to
+// distract mid-set.
 const FOCUSED_PREFIXES = ["/workout/active"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -13,6 +15,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col">
       <div className={focused ? "flex-1" : "flex-1 pb-24"}>{children}</div>
+      {!focused && <InstallPrompt />}
       {!focused && <BottomNav />}
     </div>
   );

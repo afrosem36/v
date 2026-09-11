@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   Copy,
   Check,
-  Download,
+  Upload,
   ExternalLink,
   ClipboardPaste,
   TriangleAlert,
@@ -26,8 +26,6 @@ import { getSettings } from "@/lib/db/repo/settings";
 import { getLatestBodyWeight } from "@/lib/db/repo/body";
 import { applyCoachBlock, saveCoachPlan } from "@/lib/db/repo/coach";
 import { copyToClipboard, CHATGPT_URL } from "@/lib/utils/clipboard";
-import { downloadTextFile } from "@/lib/utils/download";
-import { todayStr } from "@/lib/utils/date";
 import type { IntakeAnswers } from "@/lib/coach/contract";
 import type { TrainingGoal } from "@/types/domain";
 
@@ -67,6 +65,7 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
   const [report, setReport] = useState<ImprovementReport | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const context = useLiveQuery(async () => {
     const [exercises, availableEquipment, settings, weight] = await Promise.all([
@@ -122,13 +121,9 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
     if (ok) setTimeout(() => setCopied(false), 2500);
   }
 
-  function handleDownload() {
-    downloadTextFile(`vshape-coach-prompt-${todayStr()}.txt`, prompt, "text/plain");
-  }
-
-  function handleImport() {
+  function importText(text: string) {
     setErrors([]);
-    const extracted = extractJSON(pasted);
+    const extracted = extractJSON(text);
     if ("error" in extracted) {
       setErrors([extracted.error]);
       return;
@@ -144,6 +139,16 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
     improved.improvements.unshift(...validated.repairs);
     setReport(improved);
     setStep("review");
+  }
+
+  function handleImport() {
+    importText(pasted);
+  }
+
+  async function handleFileUpload(file: File) {
+    const text = await file.text();
+    setPasted(text);
+    importText(text);
   }
 
   async function handleApply(blockIndex: number) {
@@ -320,18 +325,17 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
           <Card className="border-accent/30">
             <CardLabel>{mode === "update" ? "Your progress review prompt" : "Your prompt is ready"}</CardLabel>
             <p className="mt-2 text-sm text-text-muted">
-              Download the prompt as a text file, open ChatGPT, and attach that file (the paperclip / attach icon) instead of
-              pasting — it&apos;s long enough that some phone browsers can&apos;t copy all of it at once. Attach your photo too
-              if you want one, then send.
+              Copy it, open ChatGPT, attach your photo if you want one, paste, and send. It&apos;s told to also give you its
+              answer as a downloadable .txt file — grab that instead of copying the reply, then bring it back here.
             </p>
             {!historyReady && (
               <p className="mt-2 text-xs text-danger">
                 You haven&apos;t logged any workouts yet, so there&apos;s no training history to review.
               </p>
             )}
-            <Button size="lg" fullWidth className="mt-3" onClick={handleDownload}>
-              <Download size={18} />
-              Download prompt (.txt)
+            <Button size="lg" fullWidth className="mt-3" onClick={handleCopy}>
+              {copied ? <Check size={18} /> : <Copy size={18} />}
+              {copied ? "Copied to clipboard" : "Copy prompt"}
             </Button>
             <a href={CHATGPT_URL} target="_blank" rel="noopener noreferrer">
               <Button variant="secondary" size="lg" fullWidth className="mt-2">
@@ -339,14 +343,6 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
                 Open ChatGPT
               </Button>
             </a>
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="mt-2 flex w-full items-center justify-center gap-1.5 text-xs font-medium text-text-muted active:text-text"
-            >
-              {copied ? <Check size={13} /> : <Copy size={13} />}
-              {copied ? "Copied to clipboard" : "Or copy the text instead"}
-            </button>
           </Card>
 
           <details className="rounded-2xl border border-border bg-surface p-4">
@@ -370,14 +366,39 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
       {step === "paste" && (
         <div className="flex flex-col gap-3">
           <Card>
-            <CardLabel>Paste ChatGPT&apos;s answer</CardLabel>
-            <p className="mt-1 text-xs text-text-muted">The whole reply is fine — surrounding chat text gets stripped automatically.</p>
+            <CardLabel>Bring back ChatGPT&apos;s answer</CardLabel>
+            <p className="mt-1 text-xs text-text-muted">
+              If it gave you a downloadable .txt file, upload it below — that&apos;s more reliable than copying a long reply on a
+              phone. Pasting the text works too.
+            </p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.json,text/plain,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFileUpload(file);
+                e.target.value = "";
+              }}
+            />
+            <Button variant="secondary" size="lg" fullWidth className="mt-3" onClick={() => fileInputRef.current?.click()}>
+              <Upload size={18} />
+              Upload the .txt file
+            </Button>
+
+            <div className="my-3 flex items-center gap-2 text-[11px] text-text-faint">
+              <div className="h-px flex-1 bg-border" />
+              or paste it
+              <div className="h-px flex-1 bg-border" />
+            </div>
+
             <textarea
               value={pasted}
               onChange={(e) => setPasted(e.target.value)}
-              rows={10}
+              rows={8}
               placeholder='{ "vshape_plan": 1, "name": "..." }'
-              className="mt-3 w-full rounded-xl border border-border bg-surface-2 p-3 font-mono text-xs outline-none focus:border-accent"
+              className="w-full rounded-xl border border-border bg-surface-2 p-3 font-mono text-xs outline-none focus:border-accent"
             />
             <Button size="lg" fullWidth className="mt-3" disabled={!pasted.trim()} onClick={handleImport}>
               <ClipboardPaste size={18} />

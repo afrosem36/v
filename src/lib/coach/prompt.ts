@@ -73,6 +73,7 @@ RULES
 4. Compounds before isolation inside each session. 3-8 exercises per session.
 5. Do not prescribe weights. My app works out the load for every set from what I actually lifted last time. You choose the exercises, sets and rep ranges.
 6. Every "why" is one or two plain sentences explaining why that exercise is in that slot for my goal.
+7. As well as putting the JSON in your reply, also save it as a downloadable .txt file (e.g. plan.txt) so I can download it directly — I'm often on my phone and copying a reply this long doesn't work reliably.
 
 EXACT JSON SHAPE
 {
@@ -201,6 +202,7 @@ RULES
 3. Schedule exactly ${intake.daysPerWeek} training days a week. Weekdays you leave out of "week" are rest days.
 4. Do not prescribe weights — my app computes every set's load from what I actually lifted. You choose exercises, sets and rep ranges.
 5. In each "why", name the thing in my data that drove the decision — the stall, the missing muscle, the trend. Not "it's good for you".
+6. As well as putting the JSON in your reply, also save it as a downloadable .txt file (e.g. plan.txt) so I can download it directly — I'm often on my phone and copying a reply this long doesn't work reliably.
 
 EXACT JSON SHAPE
 {
