@@ -5,6 +5,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import {
   Copy,
   Check,
+  Download,
   ExternalLink,
   ClipboardPaste,
   TriangleAlert,
@@ -25,6 +26,8 @@ import { getSettings } from "@/lib/db/repo/settings";
 import { getLatestBodyWeight } from "@/lib/db/repo/body";
 import { applyCoachBlock, saveCoachPlan } from "@/lib/db/repo/coach";
 import { copyToClipboard, CHATGPT_URL } from "@/lib/utils/clipboard";
+import { downloadTextFile } from "@/lib/utils/download";
+import { todayStr } from "@/lib/utils/date";
 import type { IntakeAnswers } from "@/lib/coach/contract";
 import type { TrainingGoal } from "@/types/domain";
 
@@ -117,6 +120,10 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
     const ok = await copyToClipboard(prompt);
     setCopied(ok);
     if (ok) setTimeout(() => setCopied(false), 2500);
+  }
+
+  function handleDownload() {
+    downloadTextFile(`vshape-coach-prompt-${todayStr()}.txt`, prompt, "text/plain");
   }
 
   function handleImport() {
@@ -313,16 +320,18 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
           <Card className="border-accent/30">
             <CardLabel>{mode === "update" ? "Your progress review prompt" : "Your prompt is ready"}</CardLabel>
             <p className="mt-2 text-sm text-text-muted">
-              Copy it, open ChatGPT, attach your photo if you want one, paste, and send. Then bring the JSON answer back here.
+              Download the prompt as a text file, open ChatGPT, and attach that file (the paperclip / attach icon) instead of
+              pasting — it&apos;s long enough that some phone browsers can&apos;t copy all of it at once. Attach your photo too
+              if you want one, then send.
             </p>
             {!historyReady && (
               <p className="mt-2 text-xs text-danger">
                 You haven&apos;t logged any workouts yet, so there&apos;s no training history to review.
               </p>
             )}
-            <Button size="lg" fullWidth className="mt-3" onClick={handleCopy}>
-              {copied ? <Check size={18} /> : <Copy size={18} />}
-              {copied ? "Copied to clipboard" : "Copy prompt"}
+            <Button size="lg" fullWidth className="mt-3" onClick={handleDownload}>
+              <Download size={18} />
+              Download prompt (.txt)
             </Button>
             <a href={CHATGPT_URL} target="_blank" rel="noopener noreferrer">
               <Button variant="secondary" size="lg" fullWidth className="mt-2">
@@ -330,6 +339,14 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
                 Open ChatGPT
               </Button>
             </a>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="mt-2 flex w-full items-center justify-center gap-1.5 text-xs font-medium text-text-muted active:text-text"
+            >
+              {copied ? <Check size={13} /> : <Copy size={13} />}
+              {copied ? "Copied to clipboard" : "Or copy the text instead"}
+            </button>
           </Card>
 
           <details className="rounded-2xl border border-border bg-surface p-4">
