@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { openTrainingDb, DEXIE_CLOUD_URL, LEGACY_DB_NAME, type VshapeDB } from "@/lib/db/db";
 import { ensureSeeded } from "@/lib/db/seed";
@@ -57,6 +57,56 @@ function LoadingScreen({ label }: { label: string }) {
   );
 }
 
+const LOGIN_TIMEOUT_MS = 15_000;
+const SILENT_RESUME_TIMEOUT_MS = 7_000;
+const ESCAPE_HATCH_DELAY_MS = 6_000;
+
+/** Rejects with `message` if `promise` hasn't settled within `ms` — a flaky mobile connection
+ * must never be able to hang this screen forever with no way out. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+/**
+ * Shown while activate() is in flight. A hung network call on a bad connection used to leave
+ * this on screen indefinitely with no recourse — now a manual way out appears after a few
+ * seconds, on top of the hard timeout in activate() itself.
+ */
+function AuthenticatingScreen({ onGiveUp }: { onGiveUp: () => void }) {
+  const [showEscape, setShowEscape] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowEscape(true), ESCAPE_HATCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-bg px-6 text-center">
+      <div className="text-sm font-medium tracking-wide text-text-muted">Verifying your account…</div>
+      {showEscape && (
+        <div className="flex flex-col items-center gap-2 animate-message-in">
+          <p className="max-w-xs text-xs text-text-faint">Taking longer than usual — this can happen on a slow connection.</p>
+          <button onClick={onGiveUp} className="text-sm font-medium text-accent active:opacity-70">
+            Cancel and sign in again
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------- No Dexie Cloud configured: single implicit local account, no login ----------------
 
 function LocalOnlyGate({ children }: { children: React.ReactNode }) {
@@ -105,6 +155,10 @@ function CloudAuthGate({ children }: { children: React.ReactNode }) {
   const [knownAccounts, setKnownAccounts] = useState<KnownAccount[]>([]);
   const [email, setEmail] = useState("");
   const [prefillEmail, setPrefillEmail] = useState("");
+  // Bumped by resetToSignedOut(): lets a manual "cancel" abandon an in-flight activate() call
+  // (login() has no AbortSignal to actually cancel) without its eventual result clobbering
+  // whatever the user moved on to.
+  const generationRef = useRef(0);
 
   /**
    * Opens the given account's database and proves identity. With a password: verified against
@@ -119,22 +173,35 @@ function CloudAuthGate({ children }: { children: React.ReactNode }) {
    * explicit) forces it to re-authenticate on every call, which defeats silent resume entirely.
    * Our own fetchTokens (db.ts) never reads that hint anyway; it uses the smuggled credentials
    * below instead, so there's nothing lost by leaving it out.
+   *
+   * Wrapped in a hard timeout: on a slow or flaky connection (mobile, backgrounded-then-resumed
+   * tabs) this network call can otherwise hang indefinitely with the "Verifying your account…"
+   * screen stuck on top of it and no way out.
    */
   async function activate(dbName: string, accountEmail: string, password?: string): Promise<void> {
+    const myGeneration = ++generationRef.current;
     setPhase("authenticating");
     const opened = openTrainingDb(dbName);
     if (password) setPendingCredentials(accountEmail, password);
     try {
-      await opened.cloud.login();
+      // Silent resume (no password) is purely an optimization to skip re-typing one — if it's
+      // not fast, falling back to the password form quickly beats sitting through a long wait
+      // for an optimization that isn't paying off. An explicit password submission gets a more
+      // patient budget since the person is deliberately waiting on it.
+      const timeoutMs = password ? LOGIN_TIMEOUT_MS : SILENT_RESUME_TIMEOUT_MS;
+      await withTimeout(opened.cloud.login(), timeoutMs, "That's taking too long — check your connection and try again.");
     } finally {
       takePendingCredentials(); // clears it whether or not fetchTokens consumed it
     }
+    if (generationRef.current !== myGeneration) return; // abandoned via "cancel and sign in again"
+
     setDatabase(opened);
     await ensureSeeded();
 
     const settings = await getSettings();
     const known = await rememberAccount(accountEmail, settings.name || accountEmail, dbName);
     await touchLastLogin(known.id);
+    if (generationRef.current !== myGeneration) return;
 
     setEmail(accountEmail);
     setKnownAccountId(known.id);
@@ -156,8 +223,11 @@ function CloudAuthGate({ children }: { children: React.ReactNode }) {
   }
 
   /** Drops back to the sign-in screen without a page reload — unmounting `children` here cleans
-   * up every live query in the app before the database underneath them can change. */
+   * up every live query in the app before the database underneath them can change. Also
+   * invalidates any activate() still in flight (see generationRef), so if it eventually settles
+   * it can't silently pull the person back out of the screen they just asked to return to. */
   function resetToSignedOut(emailHint?: string) {
+    generationRef.current++;
     setDatabase(null);
     setKnownAccountId(null);
     setPrefillEmail(emailHint ?? "");
@@ -184,7 +254,7 @@ function CloudAuthGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   if (phase === "checking") return <LoadingScreen label="Loading…" />;
-  if (phase === "authenticating") return <LoadingScreen label="Verifying your account…" />;
+  if (phase === "authenticating") return <AuthenticatingScreen onGiveUp={() => resetToSignedOut(prefillEmail || email || undefined)} />;
 
   if (phase === "signed-out" || !database || !knownAccountId) {
     // activate()/signUpAndActivate() set phase to "authenticating" as soon as they start; if
