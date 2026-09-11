@@ -21,6 +21,7 @@ import type {
   ExerciseNote,
   CoachPlanRecord,
   PlanSnapshot,
+  PartnerMessage,
 } from "@/types/domain";
 
 /**
@@ -73,6 +74,7 @@ export class VshapeDB extends Dexie {
   planSnapshots!: EntityTable<PlanSnapshot, "id">;
   /** Custom exercises only, mirrored from `exercises` so they can sync without the stock library. */
   customExercises!: EntityTable<Exercise, "id">;
+  partnerMessages!: EntityTable<PartnerMessage, "id">;
 
   constructor(name: string) {
     super(name, DEXIE_CLOUD_URL ? { addons: [dexieCloud] } : undefined);
@@ -111,6 +113,10 @@ export class VshapeDB extends Dexie {
     // v4: customExercises — the sync-eligible mirror of any exercise created via a coach plan.
     this.version(4).stores({
       customExercises: "id, primaryMuscle",
+    });
+    // v5: the AI training partner's conversation history.
+    this.version(5).stores({
+      partnerMessages: "id, createdAt",
     });
 
     if (DEXIE_CLOUD_URL) {

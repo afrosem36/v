@@ -327,3 +327,13 @@ export interface PlanSnapshot {
   label: string;
   payloadJson: string;
 }
+
+// ---------------- AI training partner ----------------
+
+/** One message in the ongoing partner conversation. Synced, so the chat travels with the account. */
+export interface PartnerMessage {
+  id: Id;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}

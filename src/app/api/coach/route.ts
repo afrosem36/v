@@ -19,12 +19,18 @@ interface RecentSessionInput {
   durationMin: number;
 }
 
+interface PartnerChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 type CoachRequest =
   | { type: "feedback"; workoutLabel: string; exercises: FeedbackExercise[] }
   | { type: "explain"; exerciseName: string; primaryMuscle: string; equipment: string[] }
   | { type: "adjust"; exerciseName: string; primaryMuscle: string; availableEquipment: string[]; discomfortNote: string }
   | { type: "notes"; rawNote: string; exerciseNames: string[] }
-  | { type: "nutrition"; recentSessions: RecentSessionInput[] };
+  | { type: "nutrition"; recentSessions: RecentSessionInput[] }
+  | { type: "partner"; contextText: string; history: PartnerChatMessage[]; message: string | null };
 
 const COMMON_SYSTEM =
   "You are a terse, practical strength-training coach embedded in a gym-logging app for someone rebuilding a V-shaped physique after a 9-10 month break. " +
@@ -104,6 +110,32 @@ function buildMessages(body: CoachRequest): { messages: GroqMessage[]; maxTokens
           },
         ],
       };
+    }
+    case "partner": {
+      const system =
+        "You are the user's personal training partner, built into their gym app. You know their real training data (given below as " +
+        "context, refreshed every message) — use it specifically, don't give generic fitness-influencer advice. Give practical, " +
+        "time-aware suggestions: nutrition timing around training, what to do before/during/after today's session, how their recovery " +
+        "or steps or weight trend looks. Reference their actual numbers when relevant (their streak, today's plan, latest PR, steps vs " +
+        "goal) rather than restating this instruction. Talk like a knowledgeable friend who trains, not a report — a few sentences per " +
+        "reply, conversational, no headers or bullet lists unless genuinely listing options. Never diagnose pain or injury — say so " +
+        "briefly and suggest a professional. Plain text, no markdown.";
+
+      const messages: GroqMessage[] = [
+        { role: "system", content: system },
+        { role: "system", content: `Current data:\n${body.contextText}` },
+        ...body.history.slice(-12).map((m) => ({ role: m.role, content: m.content }) as GroqMessage),
+      ];
+
+      messages.push({
+        role: "user",
+        content:
+          body.message && body.message.trim()
+            ? body.message.trim()
+            : "Give me a short, proactive check-in for right now based on the current data — don't wait for me to ask something.",
+      });
+
+      return { maxTokens: 260, messages };
     }
   }
 }

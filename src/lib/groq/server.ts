@@ -5,7 +5,7 @@ const DEFAULT_MODEL = "llama-3.3-70b-versatile";
 const TIMEOUT_MS = 15_000;
 
 export interface GroqMessage {
-  role: "system" | "user";
+  role: "system" | "user" | "assistant";
   content: string;
 }
 

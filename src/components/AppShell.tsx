@@ -4,9 +4,9 @@ import { usePathname } from "next/navigation";
 import { BottomNav } from "./BottomNav";
 import { InstallPrompt } from "./InstallPrompt";
 
-// Active workout logging is full-screen and focused — no bottom nav (or install nudge) to
-// distract mid-set.
-const FOCUSED_PREFIXES = ["/workout/active"];
+// Active workout logging and the partner chat are full-screen and focused — no bottom nav (or
+// install nudge) fighting with the chat's own fixed input bar / mid-set distractions.
+const FOCUSED_PREFIXES = ["/workout/active", "/partner"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

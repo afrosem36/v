@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Sparkles, ChevronRight, Timer, Flame } from "lucide-react";
+import { Sparkles, ChevronRight, Timer, Flame, MessageCircle } from "lucide-react";
 import { useHomeData } from "@/lib/hooks/useHomeData";
 import { useAuth } from "@/lib/auth/AuthProvider";
 import { greeting, formatDuration } from "@/lib/utils/format";
@@ -51,6 +51,19 @@ export default function HomePage() {
       </div>
 
       <WeekStrip />
+
+      <Link href="/partner">
+        <Card className="flex items-center gap-3 border-accent/40 bg-accent/10 active:brightness-95">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
+            <MessageCircle size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold">Talk to your training partner</div>
+            <div className="text-xs text-text-muted">Knows your data — ask it anything, or just say hi</div>
+          </div>
+          <ChevronRight size={16} className="shrink-0 text-text-faint" />
+        </Card>
+      </Link>
 
       {activeSession && <ActiveSessionBanner session={activeSession} setCount={activeSetCount} />}
       {!activeSession && <ReturnPromptBanner prompt={returnPrompt} />}
