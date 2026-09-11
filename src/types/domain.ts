@@ -236,8 +236,21 @@ export interface ExerciseAlternative {
 
 export type TrainingPhase = "calibration" | "steady_state";
 
+export type Gender = "male" | "female" | "other" | "unspecified";
+
 export interface AppSettings {
   id: Id; // singleton, fixed id "settings"
+  /**
+   * Profile fields live here rather than in a separate account table so they sync via Dexie
+   * Cloud along with everything else — logging in on a second device should show the same
+   * name and goal, not just the same workouts. Empty `name` means the person hasn't completed
+   * the post-login profile step yet.
+   */
+  name: string;
+  dateOfBirth: string | null;
+  gender: Gender;
+  phone: string | null;
+  goal: TrainingGoal | null;
   units: WeightUnit;
   stepGoal: number;
   defaultRestCompoundSec: number;

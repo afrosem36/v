@@ -1,36 +1,23 @@
-import type { Id, TrainingGoal } from "@/types/domain";
+import type { Gender, Id, TrainingGoal } from "@/types/domain";
 
-export type Gender = "male" | "female" | "other" | "unspecified";
+export type { Gender };
 
 /**
- * One row per person who can log in on this device. Training data never lives here — each
- * account points at its own IndexedDB database via `dbName`.
+ * A device-local pointer to an account this browser has used before — just enough to draw a
+ * "continue as..." chip without opening every candidate database. It is NOT a security
+ * boundary: identity is proven by Dexie Cloud's own email-code login (see db.cloud in db.ts),
+ * never by anything stored here. Losing or tampering with this row only loses the shortcut, not
+ * access to anyone's data.
  */
-export interface UserAccount {
+export interface KnownAccount {
   id: Id;
-  /** Lower-cased, trimmed. Unique. */
   email: string;
   name: string;
-  /** PBKDF2-SHA256, base64. Never logged, never exported. */
-  passwordHash: string;
-  passwordSalt: string;
-  iterations: number;
   dbName: string;
-  dateOfBirth: string | null; // yyyy-mm-dd
-  gender: Gender;
-  phone: string | null;
-  goal: TrainingGoal | null;
-  /** Set when a password came from an admin reset — the app asks them to change it at next login. */
-  mustChangePassword: boolean;
-  /** `issuedAt` of the last admin reset already applied, so the same reset isn't re-applied forever. */
-  appliedResetAt: string | null;
-  createdAt: string;
   lastLoginAt: string | null;
 }
 
-export interface SignUpInput {
-  email: string;
-  password: string;
+export interface ProfileInput {
   name: string;
   dateOfBirth: string | null;
   gender: Gender;
@@ -39,5 +26,3 @@ export interface SignUpInput {
   heightCm: number | null;
   weightKg: number | null;
 }
-
-export type AuthResult<T> = { ok: true; value: T } | { ok: false; error: string };

@@ -36,6 +36,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# dexie cloud — dexie-cloud.key holds a client secret, never commit it
+dexie-cloud.json
+dexie-cloud.key
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

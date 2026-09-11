@@ -18,6 +18,11 @@ const LIBRARY_VERSION = 2;
 function defaultSettings(now: string): AppSettings {
   return {
     id: SETTINGS_ID,
+    name: "",
+    dateOfBirth: null,
+    gender: "unspecified",
+    phone: null,
+    goal: null,
     units: "kg",
     stepGoal: 8000,
     defaultRestCompoundSec: 150,
@@ -50,10 +55,24 @@ export function ensureSeeded(): Promise<void> {
   const key = currentTrainingDbName() ?? "vshape";
   let pending = seedingPromises.get(key);
   if (!pending) {
-    pending = doSeed().then(() => syncLibraryIfNeeded());
+    pending = doSeed()
+      .then(() => syncLibraryIfNeeded())
+      .then(() => materializeCustomExercises());
     seedingPromises.set(key, pending);
   }
   return pending;
+}
+
+/**
+ * `exercises` is excluded from Dexie Cloud sync (it's identical bundled data on every device),
+ * but a custom exercise created via a coach plan is real user data and needs to reach other
+ * devices. It's written to the small synced `customExercises` table at creation time (see
+ * lib/db/repo/coach.ts) and copied into the local `exercises` table here — on THIS device
+ * immediately, and on any other device the next time it boots after that row has synced down.
+ */
+async function materializeCustomExercises(): Promise<void> {
+  const custom = await db.customExercises.toArray();
+  if (custom.length > 0) await db.exercises.bulkPut(custom);
 }
 
 async function doSeed(): Promise<void> {

@@ -2,7 +2,6 @@
 
 import { useEffect } from "react";
 import { AuthGate } from "@/lib/auth/AuthProvider";
-import { AuthScreen } from "@/components/auth/AuthScreen";
 import { OnboardingGate } from "@/components/OnboardingGate";
 import { registerServiceWorker } from "@/lib/pwa/register-sw";
 import { requestPersistentStorage } from "@/lib/pwa/persist-storage";
@@ -15,7 +14,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthGate renderSignedOut={({ signIn, signUp }) => <AuthScreen signIn={signIn} signUp={signUp} />}>
+    <AuthGate>
       <SessionHousekeeping />
       <OnboardingGate>{children}</OnboardingGate>
     </AuthGate>

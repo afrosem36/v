@@ -4,12 +4,13 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, LogOut, KeyRound, UserRound, Trash2, RefreshCw, ChevronRight } from "lucide-react";
+import { ChevronLeft, LogOut, UserRound, Trash2, RefreshCw, ChevronRight, Users } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { useAuth } from "@/lib/auth/AuthProvider";
-import { changePassword, deleteAccount, updateProfile } from "@/lib/auth/accounts";
+import { deleteAccountEverywhere } from "@/lib/auth/accounts";
+import { DEXIE_CLOUD_URL } from "@/lib/db/db";
 import { GOALS } from "@/lib/coach/goals";
 import { getSettings, updateSettings } from "@/lib/db/repo/settings";
 import { getLatestBodyWeight, upsertBodyWeight } from "@/lib/db/repo/body";
@@ -18,7 +19,7 @@ import { getCompletedSessions } from "@/lib/db/repo/workouts";
 import { computeBMI, bmiCategory } from "@/lib/engine/body-metrics";
 import { kgToDisplay, displayToKg, formatDuration } from "@/lib/utils/format";
 import { todayStr, formatShortDate } from "@/lib/utils/date";
-import type { Gender } from "@/lib/auth/types";
+import type { Gender } from "@/types/domain";
 import type { TrainingGoal } from "@/types/domain";
 
 const inputClass =
@@ -26,7 +27,7 @@ const inputClass =
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, signOut, refreshUser } = useAuth();
+  const { user, db, signOut, switchAccount, knownAccounts } = useAuth();
 
   const data = useLiveQuery(async () => {
     const [settings, weight, counts, completed] = await Promise.all([
@@ -45,11 +46,7 @@ export default function ProfilePage() {
   const [gender, setGender] = useState<Gender>(user.gender);
   const [goal, setGoal] = useState<TrainingGoal | null>(user.goal);
   const [saved, setSaved] = useState(false);
-
-  const [showPassword, setShowPassword] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [passwordMessage, setPasswordMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [switching, setSwitching] = useState(false);
 
   if (!data) return <div className="p-5 pt-[calc(1.5rem+var(--safe-top))] text-sm text-text-muted">Loading…</div>;
 
@@ -57,33 +54,24 @@ export default function ProfilePage() {
   const bmi = weight && settings.heightCm ? computeBMI(weight.weightKg, settings.heightCm) : null;
 
   async function handleSaveProfile() {
-    await updateProfile(user.id, {
+    await updateSettings({
       name: name.trim() || user.name,
       dateOfBirth: dateOfBirth || null,
       phone: phone.trim() || null,
       gender,
       goal,
     });
-    await refreshUser();
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   }
 
-  async function handleChangePassword() {
-    const result = await changePassword(user.id, currentPassword, newPassword);
-    if (result.ok) {
-      setPasswordMessage({ ok: true, text: "Password changed." });
-      setCurrentPassword("");
-      setNewPassword("");
-    } else {
-      setPasswordMessage({ ok: false, text: result.error });
-    }
-  }
-
   async function handleDeleteAccount() {
-    if (!confirm(`Delete ${user.email} and every workout logged under it? This cannot be undone.`)) return;
+    const message = DEXIE_CLOUD_URL
+      ? `Delete ${user.email} and every workout logged under it — everywhere, on every device? This cannot be undone.`
+      : `Delete every workout logged on this device? This cannot be undone.`;
+    if (!confirm(message)) return;
     if (!confirm("Last check — all of this account's training history will be permanently erased.")) return;
-    await deleteAccount(user.id);
+    await deleteAccountEverywhere(db, user.knownAccountId);
     window.location.reload();
   }
 
@@ -103,15 +91,6 @@ export default function ProfilePage() {
           <div className="truncate text-sm text-text-muted">{user.email}</div>
         </div>
       </div>
-
-      {user.mustChangePassword && (
-        <Card className="border-accent/50 bg-accent/10">
-          <div className="text-sm font-semibold text-accent">Set your own password</div>
-          <p className="mt-1 text-xs text-text-muted">
-            You&apos;re signed in with a password that was issued to you. Change it below to something only you know.
-          </p>
-        </Card>
-      )}
 
       <div className="grid grid-cols-2 gap-3">
         <Card className="text-center">
@@ -253,42 +232,51 @@ export default function ProfilePage() {
         </Button>
       </Card>
 
-      <Card>
-        <button onClick={() => setShowPassword((v) => !v)} className="flex w-full items-center justify-between">
-          <span className="flex items-center gap-2 text-sm font-medium">
-            <KeyRound size={16} className="text-text-muted" />
-            Change password
-          </span>
-          <span className="text-xs text-text-muted">{showPassword ? "Hide" : "Open"}</span>
-        </button>
-
-        {showPassword && (
-          <div className="mt-3 flex flex-col gap-3">
-            <input
-              type="password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              placeholder="Current password"
-              autoComplete="current-password"
-              className={inputClass}
-            />
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="New password"
-              autoComplete="new-password"
-              className={inputClass}
-            />
-            {passwordMessage && (
-              <div className={`text-xs ${passwordMessage.ok ? "text-success" : "text-danger"}`}>{passwordMessage.text}</div>
-            )}
-            <Button fullWidth disabled={!currentPassword || newPassword.length < 6} onClick={handleChangePassword}>
-              Update password
+      {DEXIE_CLOUD_URL && (
+        <Card>
+          <div className="flex items-center gap-2">
+            <Users size={16} className="text-text-muted" />
+            <CardLabel>Switch account</CardLabel>
+          </div>
+          <p className="mt-1 text-xs text-text-muted">Sign in with a different email on this device — each keeps its own training.</p>
+          <div className="mt-3 flex flex-col gap-2">
+            {knownAccounts
+              .filter((a) => a.id !== user.knownAccountId)
+              .map((a) => (
+                <button
+                  key={a.id}
+                  disabled={switching}
+                  onClick={async () => {
+                    setSwitching(true);
+                    try {
+                      await switchAccount({ emailHint: a.email });
+                    } finally {
+                      setSwitching(false);
+                    }
+                  }}
+                  className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-left text-sm disabled:opacity-40"
+                >
+                  <div className="font-medium">{a.name || a.email}</div>
+                  <div className="text-xs text-text-muted">{a.email}</div>
+                </button>
+              ))}
+            <Button
+              variant="secondary"
+              disabled={switching}
+              onClick={async () => {
+                setSwitching(true);
+                try {
+                  await switchAccount({});
+                } finally {
+                  setSwitching(false);
+                }
+              }}
+            >
+              {switching ? "Opening…" : "Add another account"}
             </Button>
           </div>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Button variant="secondary" fullWidth onClick={signOut}>
         <LogOut size={16} />

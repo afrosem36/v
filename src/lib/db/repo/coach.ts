@@ -222,6 +222,9 @@ async function createCustomExercises(bundle: CoachPlanBundle): Promise<void> {
   }));
 
   await db.exercises.bulkPut(rows);
+  // Mirrored into the small synced table so other devices pick it up — `exercises` itself
+  // isn't synced (see db.ts UNSYNCED_TABLES).
+  await db.customExercises.bulkPut(rows);
 
   // Routines reference the id the coach used; keep those pointing at the row we just created.
   const renamed = new Map(bundle.customExercises.map((c, i) => [c.id, rows[i].id]));

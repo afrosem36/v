@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
+import dexieCloud from "dexie-cloud-addon";
 import type {
   MuscleGroup,
   Equipment,
@@ -23,10 +24,31 @@ import type {
 
 /**
  * Every account gets its own IndexedDB database, so two people sharing a phone never see
- * each other's training. The first account keeps the original "vshape" name, which is what
- * makes pre-accounts data carry over untouched.
+ * each other's training even if Dexie Cloud's own logout doesn't purge a shared local cache.
+ * The first account keeps the original "vshape" name, which is what makes pre-accounts data
+ * carry over untouched.
  */
 export const LEGACY_DB_NAME = "vshape";
+
+/**
+ * The public sync endpoint from `npx dexie-cloud create` (see dexie-cloud.json). Not a secret —
+ * the real secret is dexie-cloud.key, which never leaves the machine that ran the CLI and is
+ * never read by this app. Undefined in any environment where sync hasn't been set up yet, in
+ * which case the app runs exactly as it did before: fully local, no login required.
+ */
+export const DEXIE_CLOUD_URL = process.env.NEXT_PUBLIC_DEXIE_CLOUD_URL || null;
+
+/**
+ * Stock reference data (the exercise/equipment/muscle library) is identical bundled JSON on
+ * every device and is re-seeded locally by ensureSeeded() — round-tripping it through the cloud
+ * would just burn the free tier's request-rate limit and 100MB storage cap for no benefit.
+ * Progress photos stay local for the same storage-budget reason (Dexie Cloud does support
+ * syncing Blobs, but photos are the one table that could actually blow through a free-tier
+ * quota) plus a privacy-by-default argument: body photos staying off any server unless the user
+ * explicitly asks otherwise is the safer default. Custom exercises are real user data and sync
+ * via their own small table instead (see customExercises + seed/index.ts materialization).
+ */
+const UNSYNCED_TABLES = ["muscleGroups", "equipment", "exercises", "progressPhotos"];
 
 export class VshapeDB extends Dexie {
   muscleGroups!: EntityTable<MuscleGroup, "id">;
@@ -48,9 +70,11 @@ export class VshapeDB extends Dexie {
   exerciseNotes!: EntityTable<ExerciseNote, "id">;
   coachPlans!: EntityTable<CoachPlanRecord, "id">;
   planSnapshots!: EntityTable<PlanSnapshot, "id">;
+  /** Custom exercises only, mirrored from `exercises` so they can sync without the stock library. */
+  customExercises!: EntityTable<Exercise, "id">;
 
   constructor(name: string) {
-    super(name);
+    super(name, DEXIE_CLOUD_URL ? { addons: [dexieCloud] } : undefined);
     this.version(1).stores({
       muscleGroups: "id, key",
       equipment: "id, key",
@@ -83,6 +107,18 @@ export class VshapeDB extends Dexie {
       coachPlans: "id, createdAt, status",
       planSnapshots: "id, createdAt",
     });
+    // v4: customExercises — the sync-eligible mirror of any exercise created via a coach plan.
+    this.version(4).stores({
+      customExercises: "id, primaryMuscle",
+    });
+
+    if (DEXIE_CLOUD_URL) {
+      this.cloud.configure({
+        databaseUrl: DEXIE_CLOUD_URL,
+        requireAuth: true,
+        unsyncedTables: UNSYNCED_TABLES,
+      });
+    }
   }
 }
 

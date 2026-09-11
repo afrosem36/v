@@ -1,202 +1,89 @@
 import Dexie, { type EntityTable } from "dexie";
 import { newId } from "@/lib/utils/id";
-import { LEGACY_DB_NAME, closeTrainingDb, currentTrainingDbName } from "@/lib/db/db";
-import { hashPassword, randomSalt, safeEqual, isCryptoAvailable, INSECURE_CONTEXT_MESSAGE, DEFAULT_ITERATIONS } from "./crypto";
-import { ADMIN_PASSWORD_RESETS } from "./admin-resets";
-import type { AuthResult, SignUpInput, UserAccount } from "./types";
+import { LEGACY_DB_NAME, DEXIE_CLOUD_URL, closeTrainingDb, currentTrainingDbName, type VshapeDB } from "@/lib/db/db";
+import type { KnownAccount } from "./types";
 
 /**
- * The account registry. Shared across everyone on the device and deliberately tiny: emails,
- * password hashes, profile fields, and which training database belongs to whom.
+ * The local "which accounts have signed in on this device" shortcut list. Deliberately not an
+ * authentication store — see KnownAccount's own comment. Shared across every account's separate
+ * training database.
  */
 class AccountsDB extends Dexie {
-  users!: EntityTable<UserAccount, "id">;
+  known!: EntityTable<KnownAccount, "id">;
 
   constructor() {
     super("vshape-accounts");
-    this.version(1).stores({ users: "id, &email, createdAt" });
+    this.version(1).stores({ known: "id, &email, lastLoginAt" });
   }
 }
 
 export const accountsDb = new AccountsDB();
 
-const SESSION_KEY = "vshape.session.userId";
-
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
+export async function listKnownAccounts(): Promise<KnownAccount[]> {
+  return accountsDb.known.orderBy("lastLoginAt").reverse().toArray();
 }
 
-export function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalizeEmail(email));
-}
-
-/** Deliberately mild: this guards one person's gym log on their own phone, not a bank. */
-export function passwordProblem(password: string): string | null {
-  if (password.length < 6) return "Use at least 6 characters.";
-  if (password.length > 200) return "That password is too long.";
-  return null;
-}
-
-export async function listAccounts(): Promise<UserAccount[]> {
-  return accountsDb.users.orderBy("createdAt").toArray();
-}
-
-export async function accountCount(): Promise<number> {
-  return accountsDb.users.count();
-}
-
-export async function getAccount(id: string): Promise<UserAccount | undefined> {
-  return accountsDb.users.get(id);
-}
-
-export async function findByEmail(email: string): Promise<UserAccount | undefined> {
-  return accountsDb.users.where("email").equals(normalizeEmail(email)).first();
+export async function findKnownAccountByEmail(email: string): Promise<KnownAccount | undefined> {
+  return accountsDb.known.where("email").equals(email.trim().toLowerCase()).first();
 }
 
 /**
- * The first account created on a device adopts the original "vshape" database, which is how
- * training data logged before accounts existed survives the upgrade. Everyone after that gets
- * a fresh, isolated database.
+ * The first account on a device adopts the original "vshape" database name, which is how
+ * training data logged before accounts existed survives the upgrade. Every account after that
+ * gets a fresh, isolated database name — chosen before the person's email is even known, since
+ * Dexie Cloud's own login (not this app) is what proves which email it belongs to.
  */
-async function nextDbName(): Promise<string> {
-  const taken = new Set((await accountsDb.users.toArray()).map((u) => u.dbName));
+export async function nextDbName(): Promise<string> {
+  const taken = new Set((await listKnownAccounts()).map((a) => a.dbName));
   if (!taken.has(LEGACY_DB_NAME)) return LEGACY_DB_NAME;
   return `vshape-${newId("u").slice(2)}`;
 }
 
-export async function signUp(input: SignUpInput): Promise<AuthResult<UserAccount>> {
-  if (!isCryptoAvailable()) return { ok: false, error: INSECURE_CONTEXT_MESSAGE };
+/** Called once db.cloud.currentUser resolves with a verified email for the given local database. */
+export async function rememberAccount(email: string, name: string, dbName: string): Promise<KnownAccount> {
+  const normalized = email.trim().toLowerCase();
+  const existing = await findKnownAccountByEmail(normalized);
+  const now = new Date().toISOString();
 
-  const email = normalizeEmail(input.email);
-  if (!isValidEmail(email)) return { ok: false, error: "That doesn't look like an email address." };
-  if (!input.name.trim()) return { ok: false, error: "Your name is required." };
+  if (existing) {
+    await accountsDb.known.update(existing.id, { name, dbName, lastLoginAt: now });
+    return { ...existing, name, dbName, lastLoginAt: now };
+  }
 
-  const pwProblem = passwordProblem(input.password);
-  if (pwProblem) return { ok: false, error: pwProblem };
-  if (await findByEmail(email)) return { ok: false, error: "An account with that email already exists on this device." };
-
-  const passwordSalt = randomSalt();
-  const passwordHash = await hashPassword(input.password, passwordSalt);
-
-  const user: UserAccount = {
-    id: newId("user"),
-    email,
-    name: input.name.trim(),
-    passwordHash,
-    passwordSalt,
-    iterations: DEFAULT_ITERATIONS,
-    dbName: await nextDbName(),
-    dateOfBirth: input.dateOfBirth,
-    gender: input.gender,
-    phone: input.phone?.trim() || null,
-    goal: input.goal,
-    mustChangePassword: false,
-    appliedResetAt: null,
-    createdAt: new Date().toISOString(),
-    lastLoginAt: null,
-  };
-
-  await accountsDb.users.add(user);
-  return { ok: true, value: user };
+  const account: KnownAccount = { id: newId("acct"), email: normalized, name, dbName, lastLoginAt: now };
+  await accountsDb.known.add(account);
+  return account;
 }
 
-export async function signIn(email: string, password: string): Promise<AuthResult<UserAccount>> {
-  if (!isCryptoAvailable()) return { ok: false, error: INSECURE_CONTEXT_MESSAGE };
-
-  const user = await findByEmail(email);
-  // Same message either way — no probing for which emails have accounts.
-  const genericFailure: AuthResult<UserAccount> = { ok: false, error: "Email or password is incorrect." };
-  if (!user) return genericFailure;
-
-  const attempt = await hashPassword(password, user.passwordSalt, user.iterations);
-  if (!safeEqual(attempt, user.passwordHash)) return genericFailure;
-
-  await accountsDb.users.update(user.id, { lastLoginAt: new Date().toISOString() });
-  return { ok: true, value: { ...user, lastLoginAt: new Date().toISOString() } };
+export async function touchLastLogin(id: string): Promise<void> {
+  await accountsDb.known.update(id, { lastLoginAt: new Date().toISOString() });
 }
 
-export async function changePassword(userId: string, currentPassword: string, newPassword: string): Promise<AuthResult<true>> {
-  const user = await getAccount(userId);
-  if (!user) return { ok: false, error: "Account not found." };
-
-  const problem = passwordProblem(newPassword);
-  if (problem) return { ok: false, error: problem };
-
-  const attempt = await hashPassword(currentPassword, user.passwordSalt, user.iterations);
-  if (!safeEqual(attempt, user.passwordHash)) return { ok: false, error: "Current password is incorrect." };
-
-  const passwordSalt = randomSalt();
-  const passwordHash = await hashPassword(newPassword, passwordSalt);
-  await accountsDb.users.update(userId, { passwordSalt, passwordHash, iterations: DEFAULT_ITERATIONS, mustChangePassword: false });
-  return { ok: true, value: true };
-}
-
-export async function updateProfile(
-  userId: string,
-  patch: Partial<Pick<UserAccount, "name" | "dateOfBirth" | "gender" | "phone" | "goal">>
-): Promise<void> {
-  await accountsDb.users.update(userId, patch);
-}
-
-export async function deleteAccount(userId: string): Promise<void> {
-  const user = await getAccount(userId);
-  if (!user) return;
-  // An open connection would block the delete indefinitely.
-  if (currentTrainingDbName() === user.dbName) closeTrainingDb();
-  await Dexie.delete(user.dbName);
-  await accountsDb.users.delete(userId);
-  if (readSessionUserId() === userId) clearSession();
+/** Removes the device shortcut only — does not touch the account's real data in Dexie Cloud. */
+export async function forgetKnownAccount(id: string): Promise<void> {
+  await accountsDb.known.delete(id);
 }
 
 /**
- * Applies any password reset the maintainer added to admin-resets.ts. Runs on every boot;
- * `appliedResetAt` keeps a given reset from firing more than once.
+ * Full account deletion: removes the person's account and data from Dexie Cloud itself (not
+ * just this device's cache), then clears the local copy. `db` must be the specific account's
+ * open, logged-in VshapeDB instance — its own currentUser carries the token this needs.
  */
-export async function applyAdminResets(): Promise<void> {
-  if (ADMIN_PASSWORD_RESETS.length === 0 || !isCryptoAvailable()) return;
-
-  for (const reset of ADMIN_PASSWORD_RESETS) {
-    const user = await findByEmail(reset.email);
-    if (!user || user.appliedResetAt === reset.issuedAt) continue;
-
-    const passwordSalt = randomSalt();
-    const passwordHash = await hashPassword(reset.newPassword, passwordSalt);
-    await accountsDb.users.update(user.id, {
-      passwordSalt,
-      passwordHash,
-      iterations: DEFAULT_ITERATIONS,
-      mustChangePassword: true,
-      appliedResetAt: reset.issuedAt,
+export async function deleteAccountEverywhere(db: VshapeDB, knownAccountId: string): Promise<void> {
+  const user = db.cloud?.currentUser.value;
+  if (DEXIE_CLOUD_URL && user?.userId && user?.accessToken) {
+    await fetch(`${DEXIE_CLOUD_URL}/users/${user.userId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${user.accessToken}` },
+    }).catch(() => {
+      // Best-effort: if the server call fails, still remove the local copy below rather than
+      // stranding the user unable to leave their own device.
     });
+    await db.cloud.logout({ force: true }).catch(() => {});
   }
-}
 
-// ---------------- Session persistence ----------------
-// Just the account id: it names which local database to open, and the password hash it
-// unlocks never leaves this device. Losing it to another script on the same origin would
-// mean that script could already read IndexedDB directly.
-
-export function readSessionUserId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(SESSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function writeSession(userId: string): void {
-  try {
-    window.localStorage.setItem(SESSION_KEY, userId);
-  } catch {
-    // Private-mode storage refusal — the user stays signed in for this tab only.
-  }
-}
-
-export function clearSession(): void {
-  try {
-    window.localStorage.removeItem(SESSION_KEY);
-  } catch {
-    // nothing to do
-  }
+  const dbName = db.name;
+  if (currentTrainingDbName() === dbName) closeTrainingDb();
+  await Dexie.delete(dbName);
+  await forgetKnownAccount(knownAccountId);
 }
