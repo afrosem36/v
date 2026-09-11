@@ -1,24 +1,22 @@
+import { newId } from "@/lib/utils/id";
 import type { WorkoutPlan, WorkoutDay, WorkoutDayExercise, DayOfWeek, ExercisePriority } from "@/types/domain";
 
-export const DEFAULT_PLAN_ID = "plan_default";
-
-export const DEFAULT_PLAN: WorkoutPlan = {
-  id: DEFAULT_PLAN_ID,
-  name: "V-Shape Program",
-  isActive: true,
-  createdAt: "",
-  updatedAt: "",
-};
-
-interface DayDef {
+/**
+ * The string ids below ("day_mon", ...) are internal correlation keys, used only to wire this
+ * file's own definitions together (which exercises belong to which day). They must NEVER reach
+ * Dexie as a real row id: this database is shared by every account via Dexie Cloud, which
+ * enforces one globally unique primary key per table across ALL of them, not per account. Two
+ * different people's programs writing "day_mon" or "plan_default" as their own row's id will
+ * collide — the second account's insert gets silently rejected by the sync server. buildProgramSeed()
+ * is what actually gets called, and it replaces every one of these with a fresh random id first.
+ */
+export const DAY_DEFS: readonly {
   id: string;
   dayOfWeek: DayOfWeek;
   label: string;
   isRestDay: boolean;
   order: number;
-}
-
-export const DAY_DEFS: DayDef[] = [
+}[] = [
   { id: "day_mon", dayOfWeek: 1, label: "Chest + Triceps", isRestDay: false, order: 0 },
   { id: "day_tue", dayOfWeek: 2, label: "Back + Biceps", isRestDay: false, order: 1 },
   { id: "day_wed", dayOfWeek: 3, label: "Legs + Abs", isRestDay: false, order: 2 },
@@ -27,15 +25,6 @@ export const DAY_DEFS: DayDef[] = [
   { id: "day_sat", dayOfWeek: 6, label: "Legs + Abs + Cardio", isRestDay: false, order: 5 },
   { id: "day_sun", dayOfWeek: 0, label: "Rest / Recovery", isRestDay: true, order: 6 },
 ];
-
-export const WORKOUT_DAY_SEED: WorkoutDay[] = DAY_DEFS.map((d) => ({
-  id: d.id,
-  planId: DEFAULT_PLAN_ID,
-  dayOfWeek: d.dayOfWeek,
-  label: d.label,
-  isRestDay: d.isRestDay,
-  order: d.order,
-}));
 
 type DayExDef = Omit<WorkoutDayExercise, "id" | "workoutDayId"> & { exerciseId: string };
 
@@ -49,7 +38,8 @@ function dayExercises(dayId: string, defs: DayExDef[]): WorkoutDayExercise[] {
 
 const P = (n: number): ExercisePriority => n as ExercisePriority;
 
-export const WORKOUT_DAY_EXERCISE_SEED: WorkoutDayExercise[] = [
+/** Template only — see the correlation-key warning above. Never bulkPut this directly. */
+export const TEMPLATE_WORKOUT_DAY_EXERCISES: WorkoutDayExercise[] = [
   ...dayExercises("day_mon", [
     { exerciseId: "ex_barbell_bench_press", order: 0, priority: P(1), targetSets: 3, repRangeMin: 8, repRangeMax: 12, restSeconds: 150 },
     { exerciseId: "ex_incline_dumbbell_press", order: 1, priority: P(2), targetSets: 3, repRangeMin: 8, repRangeMax: 12, restSeconds: 120 },
@@ -100,3 +90,34 @@ export const WORKOUT_DAY_EXERCISE_SEED: WorkoutDayExercise[] = [
     { exerciseId: "ex_treadmill_walk", order: 5, priority: P(2), targetSets: 1, repRangeMin: 15, repRangeMax: 20, restSeconds: 0 },
   ]),
 ];
+
+export interface ProgramSeed {
+  plan: WorkoutPlan;
+  days: WorkoutDay[];
+  dayExercises: WorkoutDayExercise[];
+}
+
+/** Builds one account's default program with fresh, globally-unique ids on every call. */
+export function buildProgramSeed(now: string): ProgramSeed {
+  const planId = newId("plan");
+  const dayIdMap = new Map(DAY_DEFS.map((d) => [d.id, newId("day")]));
+
+  const plan: WorkoutPlan = { id: planId, name: "V-Shape Program", isActive: true, createdAt: now, updatedAt: now };
+
+  const days: WorkoutDay[] = DAY_DEFS.map((d) => ({
+    id: dayIdMap.get(d.id)!,
+    planId,
+    dayOfWeek: d.dayOfWeek,
+    label: d.label,
+    isRestDay: d.isRestDay,
+    order: d.order,
+  }));
+
+  const dayExercisesOut: WorkoutDayExercise[] = TEMPLATE_WORKOUT_DAY_EXERCISES.map((e) => ({
+    ...e,
+    id: newId("wdex"),
+    workoutDayId: dayIdMap.get(e.workoutDayId)!,
+  }));
+
+  return { plan, days, dayExercises: dayExercisesOut };
+}

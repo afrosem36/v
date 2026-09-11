@@ -46,7 +46,10 @@ export default function ProfilePage() {
   const [gender, setGender] = useState<Gender>(user.gender);
   const [goal, setGoal] = useState<TrainingGoal | null>(user.goal);
   const [saved, setSaved] = useState(false);
-  const [switching, setSwitching] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   if (!data) return <div className="p-5 pt-[calc(1.5rem+var(--safe-top))] text-sm text-text-muted">Loading…</div>;
 
@@ -66,13 +69,19 @@ export default function ProfilePage() {
   }
 
   async function handleDeleteAccount() {
-    const message = DEXIE_CLOUD_URL
-      ? `Delete ${user.email} and every workout logged under it — everywhere, on every device? This cannot be undone.`
-      : `Delete every workout logged on this device? This cannot be undone.`;
-    if (!confirm(message)) return;
-    if (!confirm("Last check — all of this account's training history will be permanently erased.")) return;
-    await deleteAccountEverywhere(db, user.knownAccountId);
-    window.location.reload();
+    if (!confirm(`Delete ${user.email} and every workout logged under it? This cannot be undone.`)) return;
+    setDeleteError(null);
+    setDeleteBusy(true);
+    try {
+      const result = await deleteAccountEverywhere(db, user.knownAccountId, user.email, deletePassword);
+      if (!result.ok) {
+        setDeleteError(result.error ?? "Couldn't verify your password.");
+        return;
+      }
+      window.location.reload();
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   return (
@@ -245,34 +254,15 @@ export default function ProfilePage() {
               .map((a) => (
                 <button
                   key={a.id}
-                  disabled={switching}
-                  onClick={async () => {
-                    setSwitching(true);
-                    try {
-                      await switchAccount({ emailHint: a.email });
-                    } finally {
-                      setSwitching(false);
-                    }
-                  }}
-                  className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-left text-sm disabled:opacity-40"
+                  onClick={() => switchAccount({ emailHint: a.email })}
+                  className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-left text-sm"
                 >
                   <div className="font-medium">{a.name || a.email}</div>
                   <div className="text-xs text-text-muted">{a.email}</div>
                 </button>
               ))}
-            <Button
-              variant="secondary"
-              disabled={switching}
-              onClick={async () => {
-                setSwitching(true);
-                try {
-                  await switchAccount({});
-                } finally {
-                  setSwitching(false);
-                }
-              }}
-            >
-              {switching ? "Opening…" : "Add another account"}
+            <Button variant="secondary" onClick={() => switchAccount({})}>
+              Add another account
             </Button>
           </div>
         </Card>
@@ -285,11 +275,53 @@ export default function ProfilePage() {
 
       <Card className="border-danger/30">
         <CardLabel>Danger Zone</CardLabel>
-        <p className="mt-1 text-xs text-text-muted">Removes this account and its entire training history from this device.</p>
-        <Button variant="danger" fullWidth className="mt-3" onClick={handleDeleteAccount}>
-          <Trash2 size={16} />
-          Delete account
-        </Button>
+        <p className="mt-1 text-xs text-text-muted">
+          {DEXIE_CLOUD_URL
+            ? "Permanently removes this account and every workout logged under it, everywhere."
+            : "Permanently removes every workout logged on this device."}
+        </p>
+
+        {!confirmingDelete ? (
+          <Button variant="danger" fullWidth className="mt-3" onClick={() => setConfirmingDelete(true)}>
+            <Trash2 size={16} />
+            Delete account
+          </Button>
+        ) : (
+          <div className="mt-3 flex flex-col gap-2">
+            {DEXIE_CLOUD_URL && (
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder="Confirm your password"
+                autoComplete="current-password"
+                className={inputClass}
+              />
+            )}
+            {deleteError && <div className="text-xs text-danger">{deleteError}</div>}
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                fullWidth
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  setDeletePassword("");
+                  setDeleteError(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                fullWidth
+                disabled={deleteBusy || (!!DEXIE_CLOUD_URL && !deletePassword)}
+                onClick={handleDeleteAccount}
+              >
+                {deleteBusy ? "Deleting…" : "Confirm delete"}
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );

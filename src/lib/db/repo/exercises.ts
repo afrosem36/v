@@ -68,6 +68,11 @@ export async function getAlternatives(exercise: Exercise): Promise<Exercise[]> {
   return getExercisesByIds(exercise.alternativeExerciseIds);
 }
 
+/**
+ * Looked up by the `equipmentKey` field, not a derived id — userEquipment rows get a random id
+ * at seed time (see seed/index.ts), since a shared literal like `ue_${key}` would collide across
+ * every account in this Dexie Cloud database.
+ */
 export async function setEquipmentAvailability(key: EquipmentKey, available: boolean): Promise<void> {
-  await db.userEquipment.update(`ue_${key}`, { available, updatedAt: new Date().toISOString() });
+  await db.userEquipment.where("equipmentKey").equals(key).modify({ available, updatedAt: new Date().toISOString() });
 }

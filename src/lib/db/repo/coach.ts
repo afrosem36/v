@@ -2,8 +2,6 @@ import { db } from "@/lib/db/db";
 import { newId } from "@/lib/utils/id";
 import { getActivePlan, getAllWorkoutDays } from "@/lib/db/repo/workouts";
 import { markPlanCustomized } from "@/lib/db/repo/settings";
-import { SETTINGS_ID } from "@/lib/db/seed";
-import { DOW_LONG } from "@/lib/utils/date";
 import type { CoachPlanBundle } from "@/lib/coach/contract";
 import type {
   CoachPlanRecord,
@@ -148,7 +146,10 @@ export async function applyCoachBlock(record: CoachPlanRecord, blockId: string):
     const routineId = block.week[String(dow)];
     const routine = routineId ? block.routines.find((r) => r.id === routineId) : undefined;
     const existing = byDow.get(dow);
-    const dayId = existing?.id ?? `day_${DOW_LONG[dow].slice(0, 3).toLowerCase()}`;
+    // A fresh random id when this weekday has no existing row — never a literal like "day_mon"
+    // (see program.ts's warning: Dexie Cloud enforces one global primary key per table across
+    // every account sharing this database).
+    const dayId = existing?.id ?? newId("day");
 
     newDays.push({
       id: dayId,
@@ -185,9 +186,9 @@ export async function applyCoachBlock(record: CoachPlanRecord, blockId: string):
   await db.coachPlans.update(record.id, { status: "applied", appliedAt: now });
   await markPlanCustomized();
   // Having a real program is exactly what onboarding is waiting for.
-  const settings = await db.appSettings.get(SETTINGS_ID);
+  const settings = await db.appSettings.toCollection().first();
   if (settings && !settings.onboardingCompletedAt) {
-    await db.appSettings.update(SETTINGS_ID, { onboardingCompletedAt: now });
+    await db.appSettings.toCollection().modify({ onboardingCompletedAt: now });
   }
   return { ok: true };
 }
@@ -198,7 +199,10 @@ async function createCustomExercises(bundle: CoachPlanBundle): Promise<void> {
   const now = new Date().toISOString();
 
   const rows: Exercise[] = bundle.customExercises.map((c) => ({
-    id: c.id.startsWith("ex_") ? c.id : `ex_custom_${c.id}`,
+    // Always fresh and random — never derived from the coach plan's own id (e.g. "cx1"), which
+    // is not unique across different accounts' coach-plan generations and would collide in the
+    // synced customExercises table the same way a literal "day_mon" collides in workoutDays.
+    id: newId("ex_custom"),
     name: c.name,
     isCustom: true,
     primaryMuscle: c.primaryMuscle,

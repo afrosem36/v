@@ -6,7 +6,9 @@ import { openTrainingDb, DEXIE_CLOUD_URL, LEGACY_DB_NAME, type VshapeDB } from "
 import { ensureSeeded } from "@/lib/db/seed";
 import { getSettings } from "@/lib/db/repo/settings";
 import { listKnownAccounts, nextDbName, rememberAccount, touchLastLogin } from "./accounts";
+import { setPendingCredentials, takePendingCredentials } from "./passwordBridge";
 import { ProfileIntakeForm } from "@/components/auth/ProfileIntakeForm";
+import { SignedOutScreen } from "@/components/auth/SignedOutScreen";
 import type { KnownAccount } from "./types";
 import type { Gender, TrainingGoal } from "@/types/domain";
 
@@ -26,7 +28,7 @@ interface AuthContextValue {
   knownAccounts: KnownAccount[];
   signOut: () => void;
   /** No-op when Dexie Cloud isn't configured — there's nothing to switch between. */
-  switchAccount: (opts: { emailHint?: string }) => Promise<void>;
+  switchAccount: (opts: { emailHint?: string }) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -86,20 +88,15 @@ function LocalOnlyGate({ children }: { children: React.ReactNode }) {
       goal: settings.goal,
     },
     signOut: () => {},
-    switchAccount: async () => {},
+    switchAccount: () => {},
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-// ---------------- Dexie Cloud configured: email + one-time-code login, multi-account ----------------
+// ---------------- Dexie Cloud configured: email + password, bridged to a real Dexie Cloud session ----------------
 
 type Phase = "checking" | "signed-out" | "authenticating" | "ready";
-
-function describeAuthError(err: unknown): string {
-  if (err instanceof Error) return err.message || "Sign-in was cancelled.";
-  return "Sign-in was cancelled.";
-}
 
 function CloudAuthGate({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = useState<Phase>("checking");
@@ -107,29 +104,64 @@ function CloudAuthGate({ children }: { children: React.ReactNode }) {
   const [knownAccountId, setKnownAccountId] = useState<string | null>(null);
   const [knownAccounts, setKnownAccounts] = useState<KnownAccount[]>([]);
   const [email, setEmail] = useState("");
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [prefillEmail, setPrefillEmail] = useState("");
 
-  /** Opens the given account's database and proves identity with Dexie Cloud's own login. */
-  async function activate(dbName: string, emailHint?: string): Promise<void> {
-    setAuthError(null);
+  /**
+   * Opens the given account's database and proves identity. With a password: verified against
+   * Postgres server-side, then bridged to a real Dexie Cloud session (see fetchTokens in db.ts).
+   * Without one: a bare attempt to resume whatever session Dexie Cloud already has cached
+   * locally for this database — resolves silently if it's still valid, throws if not (expired,
+   * or genuinely never logged in here), which callers treat as "ask for the password again",
+   * not as an error worth alarming anyone over.
+   *
+   * Deliberately calls login() with NO hint. Dexie Cloud only takes its "already logged in,
+   * nothing to do" fast path when no email/userId hint is given — passing one (even just to be
+   * explicit) forces it to re-authenticate on every call, which defeats silent resume entirely.
+   * Our own fetchTokens (db.ts) never reads that hint anyway; it uses the smuggled credentials
+   * below instead, so there's nothing lost by leaving it out.
+   */
+  async function activate(dbName: string, accountEmail: string, password?: string): Promise<void> {
     setPhase("authenticating");
     const opened = openTrainingDb(dbName);
-    // Resolves near-instantly with no prompt if this database already holds a valid session
-    // (Dexie Cloud caches a crypto key locally after the first verification); otherwise its
-    // built-in modal asks for the email and a one-time code. Throws if the person cancels it.
-    await opened.cloud.login(emailHint ? { email: emailHint } : undefined);
+    if (password) setPendingCredentials(accountEmail, password);
+    try {
+      await opened.cloud.login();
+    } finally {
+      takePendingCredentials(); // clears it whether or not fetchTokens consumed it
+    }
     setDatabase(opened);
     await ensureSeeded();
 
-    const cloudEmail = opened.cloud.currentUser.value?.email ?? emailHint ?? "";
     const settings = await getSettings();
-    const known = await rememberAccount(cloudEmail, settings.name || cloudEmail, dbName);
+    const known = await rememberAccount(accountEmail, settings.name || accountEmail, dbName);
     await touchLastLogin(known.id);
 
-    setEmail(cloudEmail);
+    setEmail(accountEmail);
     setKnownAccountId(known.id);
     setKnownAccounts(await listKnownAccounts());
     setPhase("ready");
+  }
+
+  async function signUpAndActivate(dbName: string, accountEmail: string, password: string): Promise<void> {
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: accountEmail, password }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? "Couldn't create that account.");
+    }
+    await activate(dbName, accountEmail, password);
+  }
+
+  /** Drops back to the sign-in screen without a page reload — unmounting `children` here cleans
+   * up every live query in the app before the database underneath them can change. */
+  function resetToSignedOut(emailHint?: string) {
+    setDatabase(null);
+    setKnownAccountId(null);
+    setPrefillEmail(emailHint ?? "");
+    setPhase("signed-out");
   }
 
   useEffect(() => {
@@ -141,40 +173,44 @@ function CloudAuthGate({ children }: { children: React.ReactNode }) {
         return;
       }
       try {
-        await activate(accounts[0].dbName, accounts[0].email);
-      } catch (err) {
+        await activate(accounts[0].dbName, accounts[0].email); // no password — silent resume only
+      } catch {
         setDatabase(null);
-        setAuthError(describeAuthError(err));
+        setPrefillEmail(accounts[0].email);
         setPhase("signed-out");
       }
     })();
-    // Runs once on mount only — later switches go through the screen's own handlers.
+    // Runs once on mount only — later switches go through resetToSignedOut + a fresh submit.
   }, []);
 
   if (phase === "checking") return <LoadingScreen label="Loading…" />;
   if (phase === "authenticating") return <LoadingScreen label="Verifying your account…" />;
 
   if (phase === "signed-out" || !database || !knownAccountId) {
+    // activate()/signUpAndActivate() set phase to "authenticating" as soon as they start; if
+    // either throws, phase must be put back to "signed-out" here or the app is stuck showing
+    // the loading screen forever with no way back to this form — SignedOutScreen's own catch
+    // only updates its *local* error state, which is invisible while phase hides it from render.
     return (
       <SignedOutScreen
         knownAccounts={knownAccounts}
-        error={authError}
-        onPick={async (account) => {
+        prefillEmail={prefillEmail}
+        onSignIn={async (typedEmail, password) => {
+          const normalized = typedEmail.trim().toLowerCase();
+          const existing = knownAccounts.find((a) => a.email === normalized);
           try {
-            await activate(account.dbName, account.email);
+            await activate(existing ? existing.dbName : await nextDbName(), normalized, password);
           } catch (err) {
-            setDatabase(null);
-            setAuthError(describeAuthError(err));
             setPhase("signed-out");
+            throw err;
           }
         }}
-        onContinue={async (typedEmail) => {
+        onSignUp={async (typedEmail, password) => {
           try {
-            await activate(await nextDbName(), typedEmail || undefined);
+            await signUpAndActivate(await nextDbName(), typedEmail.trim().toLowerCase(), password);
           } catch (err) {
-            setDatabase(null);
-            setAuthError(describeAuthError(err));
             setPhase("signed-out");
+            throw err;
           }
         }}
       />
@@ -182,16 +218,7 @@ function CloudAuthGate({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <CloudReady
-      database={database}
-      knownAccountId={knownAccountId}
-      knownAccounts={knownAccounts}
-      email={email}
-      onSwitchAccount={async (emailHint) => {
-        const existing = emailHint ? knownAccounts.find((a) => a.email === emailHint.trim().toLowerCase()) : undefined;
-        await activate(existing ? existing.dbName : await nextDbName(), emailHint);
-      }}
-    >
+    <CloudReady database={database} knownAccountId={knownAccountId} knownAccounts={knownAccounts} email={email} onSignedOut={resetToSignedOut}>
       {children}
     </CloudReady>
   );
@@ -203,14 +230,14 @@ function CloudReady({
   knownAccountId,
   knownAccounts,
   email,
-  onSwitchAccount,
+  onSignedOut,
   children,
 }: {
   database: VshapeDB;
   knownAccountId: string;
   knownAccounts: KnownAccount[];
   email: string;
-  onSwitchAccount: (emailHint?: string) => Promise<void>;
+  onSignedOut: (emailHint?: string) => void;
   children: React.ReactNode;
 }) {
   const settings = useLiveQuery(() => getSettings(), [database]);
@@ -234,88 +261,10 @@ function CloudReady({
       goal: settings.goal,
     },
     signOut: () => {
-      database.cloud.logout().finally(() => window.location.reload());
+      database.cloud.logout().finally(() => onSignedOut());
     },
-    switchAccount: async (opts) => {
-      await onSwitchAccount(opts.emailHint);
-      window.location.reload();
-    },
+    switchAccount: (opts) => onSignedOut(opts.emailHint),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-function SignedOutScreen({
-  knownAccounts,
-  error,
-  onPick,
-  onContinue,
-}: {
-  knownAccounts: KnownAccount[];
-  error: string | null;
-  onPick: (account: KnownAccount) => Promise<void>;
-  onContinue: (email: string) => Promise<void>;
-}) {
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-center gap-5 px-6 text-center">
-      <h1 className="text-2xl font-bold tracking-tight">Vshape</h1>
-      <p className="text-sm leading-relaxed text-text-muted">
-        Sign in with your email — you&apos;ll get a one-time code, no password to remember. The same email shows the same training
-        on every device.
-      </p>
-
-      {knownAccounts.length > 0 && (
-        <div className="flex w-full flex-col gap-2">
-          {knownAccounts.map((account) => (
-            <button
-              key={account.id}
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await onPick(account);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              className="rounded-xl border border-border bg-surface-2 px-4 py-3 text-left disabled:opacity-40"
-            >
-              <div className="font-medium">{account.name || account.email}</div>
-              <div className="text-xs text-text-muted">{account.email}</div>
-            </button>
-          ))}
-          <div className="text-xs text-text-faint">or use a different email below</div>
-        </div>
-      )}
-
-      <input
-        type="email"
-        inputMode="email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        placeholder="you@example.com"
-        autoComplete="username"
-        className="h-12 w-full rounded-xl border border-border bg-surface-2 px-4 text-base outline-none placeholder:text-text-faint focus:border-accent"
-      />
-      {error && <div className="w-full rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs text-danger">{error}</div>}
-      <button
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await onContinue(email);
-          } finally {
-            setBusy(false);
-          }
-        }}
-        className="h-14 w-full rounded-2xl bg-accent text-base font-semibold text-accent-foreground disabled:opacity-40"
-      >
-        {busy ? "Opening…" : "Continue"}
-      </button>
-      <p className="text-xs text-text-faint">Everything you log stays yours — Vshape has no ads, no tracking, no data resale.</p>
-    </div>
-  );
 }

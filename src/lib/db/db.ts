@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import dexieCloud from "dexie-cloud-addon";
+import { takePendingCredentials } from "@/lib/auth/passwordBridge";
 import type {
   MuscleGroup,
   Equipment,
@@ -117,6 +118,23 @@ export class VshapeDB extends Dexie {
         databaseUrl: DEXIE_CLOUD_URL,
         requireAuth: true,
         unsyncedTables: UNSYNCED_TABLES,
+        // Bridges our own email+password to Dexie Cloud: verifies the password server-side
+        // (see /api/auth/token) and only then mints a real Dexie Cloud session for it. Providing
+        // this replaces Dexie's own built-in email-code login entirely — it's never shown.
+        fetchTokens: async ({ public_key }) => {
+          const credentials = takePendingCredentials();
+          if (!credentials) throw new Error("Not signed in.");
+          const res = await fetch("/api/auth/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: credentials.email, password: credentials.password, publicKey: public_key }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error ?? "Sign-in failed.");
+          }
+          return res.json();
+        },
       });
     }
   }

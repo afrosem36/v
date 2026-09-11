@@ -65,13 +65,32 @@ export async function forgetKnownAccount(id: string): Promise<void> {
 }
 
 /**
- * Full account deletion: removes the person's account and data from Dexie Cloud itself (not
- * just this device's cache), then clears the local copy. `db` must be the specific account's
- * open, logged-in VshapeDB instance — its own currentUser carries the token this needs.
+ * Full account deletion: removes the Postgres accounts row (password re-checked server-side —
+ * this is what actually frees the email up for reuse), removes the person's Dexie Cloud account
+ * and data, then clears the local copy. `db` must be the specific account's open, logged-in
+ * VshapeDB instance — its own currentUser carries the token the Dexie Cloud call needs.
  */
-export async function deleteAccountEverywhere(db: VshapeDB, knownAccountId: string): Promise<void> {
+export async function deleteAccountEverywhere(db: VshapeDB, knownAccountId: string, email: string, password: string): Promise<{ ok: boolean; error?: string }> {
+  // No Dexie Cloud configured means no Postgres account and no password to check either — just
+  // wipe the single local database, matching the original pre-accounts behavior.
+  if (!DEXIE_CLOUD_URL) {
+    await Dexie.delete(db.name);
+    closeTrainingDb();
+    return { ok: true };
+  }
+
+  const res = await fetch("/api/auth/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    return { ok: false, error: body.error ?? "Couldn't verify your password." };
+  }
+
   const user = db.cloud?.currentUser.value;
-  if (DEXIE_CLOUD_URL && user?.userId && user?.accessToken) {
+  if (user?.userId && user?.accessToken) {
     await fetch(`${DEXIE_CLOUD_URL}/users/${user.userId}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${user.accessToken}` },
@@ -86,4 +105,5 @@ export async function deleteAccountEverywhere(db: VshapeDB, knownAccountId: stri
   if (currentTrainingDbName() === dbName) closeTrainingDb();
   await Dexie.delete(dbName);
   await forgetKnownAccount(knownAccountId);
+  return { ok: true };
 }
