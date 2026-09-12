@@ -55,11 +55,36 @@ export function ensureSeeded(): Promise<void> {
   let pending = seedingPromises.get(key);
   if (!pending) {
     pending = doSeed()
+      .then(() => backfillSettingsDefaults())
       .then(() => syncLibraryIfNeeded())
       .then(() => materializeCustomExercises());
     seedingPromises.set(key, pending);
   }
   return pending;
+}
+
+/**
+ * Fields added to AppSettings after launch (name, gender, phone, goal, heightCm, ...) never got a
+ * migration, since adding a non-indexed field doesn't need a Dexie version bump — so any account
+ * seeded before that field existed is still missing it entirely (not "", not null: absent).
+ * `settings.name.trim()` in AuthProvider then throws on `undefined`. Patches in only the keys the
+ * existing row actually lacks, so nothing already set by the user (or by an older backfill) is
+ * ever overwritten.
+ */
+async function backfillSettingsDefaults(): Promise<void> {
+  const settings = await db.appSettings.toCollection().first();
+  if (!settings) return;
+
+  const defaults = defaultSettings(settings.phaseStartedAt ?? new Date().toISOString());
+  const patch: Partial<AppSettings> = {};
+  for (const key of Object.keys(defaults) as (keyof AppSettings)[]) {
+    if (key === "id") continue;
+    if (!(key in settings)) (patch as Record<string, unknown>)[key] = defaults[key];
+  }
+
+  if (Object.keys(patch).length > 0) {
+    await db.appSettings.toCollection().modify(patch);
+  }
 }
 
 /**
