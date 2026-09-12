@@ -6,7 +6,9 @@ import { openTrainingDb, LEGACY_DB_NAME, type VshapeDB } from "@/lib/db/db";
 import { ensureSeeded } from "@/lib/db/seed";
 import { getSettings } from "@/lib/db/repo/settings";
 import { supabase, SUPABASE_CONFIGURED } from "@/lib/supabase/client";
-import { findKnownAccountByUserId, nextDbName, rememberAccount, touchLastLogin } from "./accounts";
+import { findKnownAccountByUserId, nextDbName, rememberAccount, touchLastLogin, markSyncBootstrapped } from "./accounts";
+import { bootstrapSyncIfNeeded } from "@/lib/sync/bootstrap";
+import { startSyncEngine, stopSyncEngine } from "@/lib/sync/engine";
 import { ProfileIntakeForm } from "@/components/auth/ProfileIntakeForm";
 import { SignedOutScreen } from "@/components/auth/SignedOutScreen";
 import type { Gender, TrainingGoal } from "@/types/domain";
@@ -130,9 +132,14 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
       const opened = openTrainingDb(dbName);
       await ensureSeeded();
 
+      if (!existing?.syncBootstrappedAt) {
+        await bootstrapSyncIfNeeded(opened, userId);
+      }
+
       const settings = await getSettings();
       const known = await rememberAccount(userId, userEmail, settings.name || displayNameHint, dbName);
       await touchLastLogin(known.id);
+      if (!known.syncBootstrappedAt) await markSyncBootstrapped(known.id);
 
       activatedUserIdRef.current = userId;
       setDatabase(opened);
@@ -140,6 +147,7 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
       setKnownAccountId(known.id);
       setError(null);
       setPhase("ready");
+      startSyncEngine(opened, userId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong signing you in.");
       setDatabase(null);
@@ -163,6 +171,7 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT") {
+        stopSyncEngine();
         activatedUserIdRef.current = null;
         setDatabase(null);
         setKnownAccountId(null);
@@ -176,7 +185,10 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      stopSyncEngine();
+    };
     // Runs once on mount only — session changes after that come through onAuthStateChange.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

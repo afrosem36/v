@@ -18,6 +18,8 @@ export interface KnownAccount {
   name: string;
   dbName: string;
   lastLoginAt: string | null;
+  /** Set once this device has completed the one-time initial push-up/pull-down handshake for this account. See src/lib/sync/bootstrap.ts. */
+  syncBootstrappedAt?: string | null;
 }
 
 export interface ProfileInput {

@@ -1,9 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronRight, Download, Upload, Trash2, UserRound, Sparkles, Dumbbell } from "lucide-react";
+import { ChevronRight, Download, Upload, Trash2, UserRound, Sparkles, Dumbbell, RefreshCw } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -17,6 +17,16 @@ import { downloadTextFile } from "@/lib/utils/download";
 import { todayStr } from "@/lib/utils/date";
 import { LastUpdated } from "@/components/LastUpdated";
 import { useAuth } from "@/lib/auth/AuthProvider";
+import { supabase, SUPABASE_CONFIGURED } from "@/lib/supabase/client";
+import { getSyncStatus, subscribeSyncStatus, type SyncStatus } from "@/lib/sync/engine";
+import { flushOutbox } from "@/lib/sync/push";
+import { pullChanges, getSyncCursor } from "@/lib/sync/pull";
+
+function useSyncStatus(): SyncStatus {
+  const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
+  useEffect(() => subscribeSyncStatus(setStatus), []);
+  return status;
+}
 
 function useSettingsData() {
   return useLiveQuery(async () => {
@@ -29,12 +39,22 @@ function useSettingsData() {
 export default function SettingsPage() {
   const data = useSettingsData();
   const { user } = useAuth();
+  const syncStatus = useSyncStatus();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
 
   if (!data) return <div className="p-5 pt-[calc(1.5rem+var(--safe-top))] text-sm text-text-muted">Loading…</div>;
 
   const { settings, userEquipment } = data;
+
+  async function handleSyncNow() {
+    if (!supabase) return;
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData.user?.id;
+    if (!userId) return;
+    await flushOutbox(db, userId);
+    await pullChanges(db, userId, getSyncCursor(db.name));
+  }
 
   async function handleExportJSON() {
     const json = await exportAllDataJSON();
@@ -83,6 +103,29 @@ export default function SettingsPage() {
           <ChevronRight size={16} className="text-text-faint" />
         </Card>
       </Link>
+
+      {SUPABASE_CONFIGURED && (
+        <Card>
+          <div className="flex items-center justify-between">
+            <CardLabel>Sync</CardLabel>
+            <button
+              onClick={handleSyncNow}
+              aria-label="Sync now"
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-2 border border-border active:brightness-90"
+            >
+              <RefreshCw size={13} className={syncStatus.syncing ? "animate-spin" : ""} />
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-text-muted">
+            {syncStatus.lastError
+              ? `Sync error: ${syncStatus.lastError}`
+              : syncStatus.lastSyncedAt
+                ? `Synced across your devices · last ${new Date(syncStatus.lastSyncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                : "Waiting for first sync…"}
+            {syncStatus.pendingCount > 0 && ` · ${syncStatus.pendingCount} pending`}
+          </p>
+        </Card>
+      )}
 
       <Link href="/coach">
         <Card className="flex items-center justify-between active:brightness-95">
@@ -278,7 +321,7 @@ export default function SettingsPage() {
       </Card>
 
       <p className="text-center text-xs text-text-faint">
-        Vshape · Dark theme · Data stored on this device · <LastUpdated />
+        Vshape · Dark theme · {SUPABASE_CONFIGURED ? "Synced to your account" : "Data stored on this device"} · <LastUpdated />
       </p>
     </div>
   );

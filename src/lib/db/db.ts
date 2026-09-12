@@ -1,4 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
+import { SUPABASE_CONFIGURED } from "@/lib/supabase/client";
+import { registerSyncHooks, type OutboxEntry } from "@/lib/sync/outbox";
 import type {
   MuscleGroup,
   Equipment,
@@ -52,6 +54,8 @@ export class VshapeDB extends Dexie {
   /** Custom exercises only, mirrored from `exercises` so they can sync without the stock library. */
   customExercises!: EntityTable<Exercise, "id">;
   partnerMessages!: EntityTable<PartnerMessage, "id">;
+  /** Local-only outbox of pending pushes for the cross-device sync engine — never synced itself. */
+  syncOutbox!: EntityTable<OutboxEntry, "id">;
 
   constructor(name: string) {
     super(name);
@@ -138,6 +142,11 @@ export class VshapeDB extends Dexie {
         await dedupeTable("scheduleOverrides", "date");
         await dedupeTable("exerciseNotes", "exerciseId");
       });
+    // v7: local outbox for the Supabase cross-device sync engine (src/lib/sync/). Only written to
+    // and read from this device — its rows never themselves sync.
+    this.version(7).stores({
+      syncOutbox: "id, tableName, ts",
+    });
   }
 }
 
@@ -148,6 +157,9 @@ export function openTrainingDb(name: string): VshapeDB {
   if (instance && instance.name === name) return instance;
   if (instance) instance.close();
   instance = new VshapeDB(name);
+  // Only meaningful with a Supabase account to sync against — LocalOnlyGate never has a userId
+  // to key remote rows by, so it stays local-only by simply never starting the sync engine.
+  if (SUPABASE_CONFIGURED) registerSyncHooks(instance);
   return instance;
 }
 

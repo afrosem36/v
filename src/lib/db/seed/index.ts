@@ -94,7 +94,7 @@ async function backfillSettingsDefaults(): Promise<void> {
  * lib/db/repo/coach.ts) and copied into the local `exercises` table here — on THIS device
  * immediately, and on any other device the next time it boots after that row has synced down.
  */
-async function materializeCustomExercises(): Promise<void> {
+export async function materializeCustomExercises(): Promise<void> {
   const custom = await db.customExercises.toArray();
   if (custom.length > 0) await db.exercises.bulkPut(custom);
 }

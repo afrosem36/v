@@ -68,6 +68,10 @@ export async function touchLastLogin(id: string): Promise<void> {
   await accountsDb.known.update(id, { lastLoginAt: new Date().toISOString() });
 }
 
+export async function markSyncBootstrapped(id: string): Promise<void> {
+  await accountsDb.known.update(id, { syncBootstrappedAt: new Date().toISOString() });
+}
+
 /** Removes the device shortcut only — does not touch the account's real data anywhere else. */
 export async function forgetKnownAccount(id: string): Promise<void> {
   await accountsDb.known.delete(id);

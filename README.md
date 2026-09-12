@@ -1,6 +1,6 @@
 # Vshape
 
-A personal training PWA built around one goal: a V-shaped physique (wider shoulders/lats, developed upper chest, strong arms and legs, lower waist over time). Local-first — all data lives in IndexedDB on your device, nothing is sent to a server.
+A personal training PWA built around one goal: a V-shaped physique (wider shoulders/lats, developed upper chest, strong arms and legs, lower waist over time). Local-first — all data lives in IndexedDB on your device and every screen reads from there, never from the network. If you set up Google sign-in (see below), your data also syncs in the background to your other devices signed into the same account.
 
 ## Run it locally
 
@@ -24,7 +24,7 @@ vercel --prod     # deploy to your production URL
 By default it's a static/client app with no environment variables needed. Two optional features need them, both in your Vercel project's environment variables (see `.env.local` locally for the same setup) — **and note Vercel only picks up new/changed variables on the next deployment, so redeploy after adding any of these**:
 
 - **AI coaching** (session feedback, exercise explanations, the training-partner chat): set `GROQ_API_KEY` (and optionally `GROQ_MODEL`).
-- **Google sign-in**: set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from your Supabase project's Settings → API, and enable the Google provider under Authentication → Providers in the Supabase dashboard. Without these, the app runs as a single implicit local account with no login screen at all.
+- **Google sign-in + cross-device sync**: set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from your Supabase project's Settings → API, enable the Google provider under Authentication → Providers, and run `src/lib/sync/schema.sql` once in the Supabase SQL editor to create the `sync_rows` table sync needs. Without these, the app runs as a single implicit local account with no login screen and no sync at all — signing in on a second device otherwise starts that device with an empty, brand-new local database.
 
 ## What's here
 
