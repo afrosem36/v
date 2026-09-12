@@ -5,7 +5,7 @@ import { setSyncBootstrapped } from "@/lib/auth/accounts";
 import { supabase } from "@/lib/supabase/client";
 import { flushOutbox } from "./push";
 import { pullChanges, getSyncCursor } from "./pull";
-import { attemptBootstrap } from "./bootstrap";
+import { attemptBootstrap, ensureAppSettingsExist } from "./bootstrap";
 import { onLocalWrite } from "./notify";
 
 // Realtime + the on-write debounce below cover the fast path; this interval is just the fallback
@@ -89,6 +89,10 @@ async function runCycle(instance: VshapeDB, userId: string, knownAccountId: stri
     // up before attemptBootstrap ever gets to say no.
     const pendingIds = await flushOutbox(instance, userId);
     await pullChanges(instance, userId, getSyncCursor(instance.name), pendingIds);
+    // A pull can legitimately delete this device's own appSettings row (e.g. a tombstone left
+    // over from a "Delete Everywhere" run elsewhere) — never leave the app with zero settings
+    // rows while it's running; see ensureAppSettingsExist's own comment for the full picture.
+    await ensureAppSettingsExist(instance);
     setStatus({ lastSyncedAt: new Date().toISOString(), lastError: null, pendingCount: pendingIds.size });
   } catch (err) {
     setStatus({ lastError: err instanceof Error ? err.message : "Sync failed" });

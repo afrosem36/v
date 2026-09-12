@@ -1,6 +1,6 @@
 import type { VshapeDB } from "@/lib/db/db";
 import { supabase } from "@/lib/supabase/client";
-import { materializeCustomExercises } from "@/lib/db/seed";
+import { materializeCustomExercises, defaultSettings } from "@/lib/db/seed";
 import type { WorkoutDay, WorkoutSession } from "@/types/domain";
 import { SYNCED_TABLES, FULL_REPLACE_TABLES } from "./tables";
 import { pushEverything } from "./push";
@@ -29,6 +29,29 @@ async function reconcileDanglingWorkoutDayIds(instance: VshapeDB): Promise<void>
   if (dangling.length === 0) return;
 
   await instance.table<WorkoutSession, string>("workoutSessions").bulkPut(dangling.map((s) => ({ ...s, workoutDayId: null })));
+}
+
+/**
+ * Guarantees this device is never left with zero appSettings rows. getSettings() throws
+ * ("Settings not seeded yet") the instant any query touches it with none, which is an uncaught,
+ * app-breaking crash — ensureSeeded() only ever re-seeds on the NEXT full db open, not mid-session.
+ * Two real paths can leave a device with none while it's running:
+ *  - The "joined" bootstrap path (below) wipes local appSettings before pulling the real one down,
+ *    and that pull can legitimately come back with nothing for it (remote's own row missing or
+ *    tombstoned, a truncated sync_rows table, a partial/interrupted earlier sync).
+ *  - An ordinary steady-state pull, no bootstrap involved: if appSettings was ever tombstoned
+ *    remotely (e.g. a "Delete Everywhere" run on another device), ANY later pull applies that
+ *    tombstone locally via table.delete() the same as any other row — engine.ts calls this after
+ *    every pull, not just the join path, to close that gap too.
+ * Backfilling a fresh default row here is harmless either way: if a real row does show up on a
+ * later pull, it lands as its own row and Settings -> Sync's "Force full resync" (or the ordinary
+ * next join) reconciles it same as any other row.
+ */
+export async function ensureAppSettingsExist(instance: VshapeDB): Promise<boolean> {
+  const existing = await instance.table("appSettings").count();
+  if (existing > 0) return false;
+  await instance.table("appSettings").add(defaultSettings(new Date().toISOString()));
+  return true;
 }
 
 /**
@@ -73,7 +96,8 @@ export async function attemptBootstrap(instance: VshapeDB, userId: string): Prom
     await pullChanges(instance, userId, null, new Set());
     await materializeCustomExercises();
     await reconcileDanglingWorkoutDayIds(instance);
-    await pushEverything(instance, userId, MERGE_UP_TABLES);
+    const backfilledSettings = await ensureAppSettingsExist(instance);
+    await pushEverything(instance, userId, backfilledSettings ? [...MERGE_UP_TABLES, "appSettings"] : MERGE_UP_TABLES);
     return "joined";
   }
 

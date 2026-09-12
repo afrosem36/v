@@ -14,7 +14,7 @@ import type { AppSettings, EquipmentKey } from "@/types/domain";
  */
 const LIBRARY_VERSION = 2;
 
-function defaultSettings(now: string): AppSettings {
+export function defaultSettings(now: string): AppSettings {
   return {
     id: newId("settings"),
     name: "",
