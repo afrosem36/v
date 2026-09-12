@@ -33,7 +33,17 @@ export default function PartnerPage() {
   useEffect(() => {
     if (messages == null || messages.length > 0 || greetedRef.current) return;
     greetedRef.current = true;
-    sendToPartner(null);
+    // Deferred via setTimeout: this effect fires on mount, at the exact same moment this page's
+    // own useLiveQuery (messages, above) — and any other useLiveQuery active elsewhere in the
+    // app — is also starting up. sendToPartner ultimately calls addPartnerMessage(), a real Dexie
+    // write; un-deferred, that write risked inheriting Dexie's "this code is inside a
+    // useLiveQuery querier, read-only" zone tracking and getting rejected with "ReadOnlyError:
+    // Readwrite transaction in liveQuery context" — the same class of bug already fixed at every
+    // other write-on-mount site (src/lib/auth/AuthProvider.tsx, src/components/AppBootstrap.tsx,
+    // src/components/OnboardingGate.tsx, src/lib/sync/engine.ts, src/lib/sync/outbox.ts).
+    setTimeout(() => {
+      sendToPartner(null);
+    }, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 

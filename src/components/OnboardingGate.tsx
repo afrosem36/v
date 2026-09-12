@@ -30,7 +30,24 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
 
   const shouldBackfill = state?.shouldBackfill ?? false;
   useEffect(() => {
-    if (shouldBackfill) updateSettings({ onboardingCompletedAt: new Date().toISOString() });
+    if (!shouldBackfill) return;
+    // Deferred via setTimeout, not called inline: this effect runs at the exact same moment
+    // every useLiveQuery in the tree below (children includes the whole app, useHomeData's
+    // dashboard query among them) is also mounting. Dexie propagates its "this code is inside a
+    // useLiveQuery querier, read-only" tracking through the Promise microtask chain of whatever's
+    // running when a write fires, not just the current transaction — a write that inherits that
+    // tag is rejected with "ReadOnlyError: Readwrite transaction in liveQuery context", blamed on
+    // whichever querier's zone was ambient even though that querier itself never wrote anything.
+    // Same fix as every other write-on-mount path already hit by this (src/lib/sync/engine.ts,
+    // src/lib/sync/outbox.ts, src/components/AppBootstrap.tsx,
+    // src/lib/auth/AuthProvider.tsx): setTimeout starts a genuinely fresh macrotask with no
+    // ambient Dexie zone, since Dexie's zone propagation never crosses it. This one is especially
+    // easy to hit repeatedly: it fires on every load for any account whose onboardingCompletedAt
+    // is missing despite having real training history (e.g. a settings row that got wiped and
+    // re-seeded blank by a sync bootstrap/recovery pass), not just once ever.
+    setTimeout(() => {
+      updateSettings({ onboardingCompletedAt: new Date().toISOString() });
+    }, 0);
   }, [shouldBackfill]);
 
   if (!state) {
