@@ -30,7 +30,16 @@ type CoachRequest =
   | { type: "adjust"; exerciseName: string; primaryMuscle: string; availableEquipment: string[]; discomfortNote: string }
   | { type: "notes"; rawNote: string; exerciseNames: string[] }
   | { type: "nutrition"; recentSessions: RecentSessionInput[] }
-  | { type: "partner"; contextText: string; history: PartnerChatMessage[]; message: string | null };
+  | { type: "partner"; contextText: string; history: PartnerChatMessage[]; message: string | null }
+  | {
+      type: "exercise_tip";
+      exerciseName: string;
+      targetRepMin: number;
+      targetRepMax: number;
+      targetRir: number | null;
+      restSeconds: number;
+      sets: { weight: number; reps: number; rir: number | null }[];
+    };
 
 const COMMON_SYSTEM =
   "You are a terse, practical strength-training coach embedded in a gym-logging app for someone rebuilding a V-shaped physique after a 9-10 month break. " +
@@ -119,7 +128,9 @@ function buildMessages(body: CoachRequest): { messages: GroqMessage[]; maxTokens
         "or steps or weight trend looks. Reference their actual numbers when relevant (their streak, today's plan, latest PR, steps vs " +
         "goal) rather than restating this instruction. Talk like a knowledgeable friend who trains, not a report — a few sentences per " +
         "reply, conversational, no headers or bullet lists unless genuinely listing options. Never diagnose pain or injury — say so " +
-        "briefly and suggest a professional. Plain text, no markdown.";
+        "briefly and suggest a professional. When asked about a specific lift or PR (e.g. \"what's my best barbell bench\"), answer " +
+        "directly from the 'All-time best lifts' list in the context — don't hedge or say you don't have access to it, and say so " +
+        "plainly only if that exact exercise genuinely isn't in the list. Plain text, no markdown.";
 
       const messages: GroqMessage[] = [
         { role: "system", content: system },
@@ -136,6 +147,23 @@ function buildMessages(body: CoachRequest): { messages: GroqMessage[]; maxTokens
       });
 
       return { maxTokens: 260, messages };
+    }
+    case "exercise_tip": {
+      const setsDesc = body.sets.map((s, i) => `set ${i + 1}: ${s.weight}kg x ${s.reps}${s.rir != null ? ` (RIR ${s.rir})` : ""}`).join(", ");
+      return {
+        maxTokens: 50,
+        messages: [
+          { role: "system", content: COMMON_SYSTEM },
+          {
+            role: "user",
+            content:
+              `Mid-exercise, still doing "${body.exerciseName}" (target ${body.targetRepMin}-${body.targetRepMax} reps` +
+              `${body.targetRir != null ? `, ~${body.targetRir} RIR` : ""}, ${body.restSeconds}s rest between sets). Sets logged so far: ${setsDesc}. ` +
+              `In ONE short sentence (under 18 words), give a specific, encouraging cue for the next set based on these numbers — call out a ` +
+              `weight/rep drop between sets, pacing, or rest if that's what the numbers show. Don't just restate the numbers.`,
+          },
+        ],
+      };
     }
   }
 }

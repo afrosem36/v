@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Info, Repeat2, ArrowRightLeft } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Info, Repeat2, ArrowRightLeft, Sparkles } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { CompletedSetRow, PendingSetRow } from "@/components/workout/SetRow";
@@ -11,6 +11,7 @@ import { EditSetSheet } from "@/components/workout/EditSetSheet";
 import { useActiveWorkoutStore } from "@/store/active-workout-store";
 import { formatLastPerformance } from "@/lib/utils/workout-format";
 import { totalLoadForSet } from "@/lib/engine/weight-math";
+import { askCoach } from "@/lib/groq/askCoach";
 import type { SessionExerciseEntry } from "@/lib/hooks/useActiveWorkoutSession";
 import type { ExerciseSet } from "@/types/domain";
 
@@ -64,6 +65,31 @@ export function ExercisePanel({ entry, sessionId, isLast, onNext, onSwap }: Exer
   const currentVolume = loggedSets.reduce((sum, s) => sum + totalLoadForSet(s) * s.reps, 0);
   const lastVolume = lastWorkingSets.reduce((sum, s) => sum + totalLoadForSet(s) * s.reps, 0);
   const volumeDeltaPct = lastVolume > 0 ? Math.round(((currentVolume - lastVolume) / lastVolume) * 100) : null;
+
+  // A short AI cue after each set — while the exercise is still in progress, not once it's done
+  // (the volume-vs-last-time card covers that moment instead). Ignored if it arrives after the
+  // person has already moved to a different set count or exercise.
+  const [tip, setTip] = useState<string | null>(null);
+  const tipRequestSetCount = useRef(0);
+
+  useEffect(() => {
+    setTip(null);
+    if (isComplete || loggedSets.length === 0 || exercise.loadType === "cardio") return;
+    const setCountAtRequest = loggedSets.length;
+    tipRequestSetCount.current = setCountAtRequest;
+    askCoach({
+      type: "exercise_tip",
+      exerciseName: exercise.name,
+      targetRepMin: repRangeMin,
+      targetRepMax: repRangeMax,
+      targetRir: prescription.action === "calibrate" ? null : prescription.targetRir,
+      restSeconds: dayExercise.restSeconds,
+      sets: loggedSets.map((s) => ({ weight: totalLoadForSet(s), reps: s.reps, rir: s.rir })),
+    }).then((text) => {
+      if (text && tipRequestSetCount.current === setCountAtRequest) setTip(text);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedSets.length, isComplete]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -127,6 +153,13 @@ export function ExercisePanel({ entry, sessionId, isLast, onNext, onSwap }: Exer
         {loggedSets.map((s) => (
           <CompletedSetRow key={s.id} setNumber={s.setNumber} set={s} onEdit={setEditingSet} />
         ))}
+
+        {tip && !isComplete && (
+          <div className="flex animate-message-in items-start gap-2 rounded-xl border border-accent/25 bg-accent/5 px-3 py-2.5 text-xs leading-snug text-text">
+            <Sparkles size={13} className="mt-0.5 shrink-0 text-accent" />
+            <span>{tip}</span>
+          </div>
+        )}
 
         {!isComplete && (
           <PendingSetRow

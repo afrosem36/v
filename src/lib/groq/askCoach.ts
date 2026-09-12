@@ -21,7 +21,16 @@ type CoachRequestBody =
   | { type: "explain"; exerciseName: string; primaryMuscle: string; equipment: string[] }
   | { type: "adjust"; exerciseName: string; primaryMuscle: string; availableEquipment: string[]; discomfortNote: string }
   | { type: "notes"; rawNote: string; exerciseNames: string[] }
-  | { type: "nutrition"; recentSessions: RecentSessionInput[] };
+  | { type: "nutrition"; recentSessions: RecentSessionInput[] }
+  | {
+      type: "exercise_tip";
+      exerciseName: string;
+      targetRepMin: number;
+      targetRepMax: number;
+      targetRir: number | null;
+      restSeconds: number;
+      sets: { weight: number; reps: number; rir: number | null }[];
+    };
 
 /**
  * Always resolves — returns null on any failure (offline, Groq down, timeout, missing key).

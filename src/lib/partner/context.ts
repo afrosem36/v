@@ -1,11 +1,11 @@
 import { getScheduledDay, getActiveSession, getSessionSets, computeWorkoutStreak, getLastCompletedSession } from "@/lib/db/repo/workouts";
 import { getStepsForDate, getLatestBodyWeight, getBodyWeightsInRange } from "@/lib/db/repo/body";
-import { getMostRecentPR } from "@/lib/db/repo/records";
-import { getExercise } from "@/lib/db/repo/exercises";
+import { getMostRecentPR, getAllPRsByType } from "@/lib/db/repo/records";
+import { getExercise, getAllExercises } from "@/lib/db/repo/exercises";
 import { getSettings } from "@/lib/db/repo/settings";
 import { todayStr, dateStr, daysAgo } from "@/lib/utils/date";
 import { goalByKey } from "@/lib/coach/goals";
-import { subDays } from "date-fns";
+import { subDays, differenceInYears } from "date-fns";
 
 export type TimeOfDay = "early_morning" | "morning" | "afternoon" | "evening" | "night";
 
@@ -31,7 +31,12 @@ export interface PartnerContext {
   latestWeightKg: number | null;
   weightTrendKg: number | null;
   goalWeightKg: number | null;
+  heightCm: number | null;
+  ageYears: number | null;
+  gender: string | null;
   mostRecentPR: string | null;
+  /** Every exercise's all-time heaviest-weight PR, heaviest first — lets it answer "what's my best X" directly. */
+  bestLifts: { exerciseName: string; weightKg: number }[];
 }
 
 /**
@@ -45,7 +50,7 @@ export async function buildPartnerContext(now: Date): Promise<PartnerContext> {
   const settings = await getSettings();
   const goal = goalByKey(settings.goal ?? "vshape");
 
-  const [scheduled, activeSession, streak, lastCompleted, steps, latestWeight, recentPR] = await Promise.all([
+  const [scheduled, activeSession, streak, lastCompleted, steps, latestWeight, recentPR, heaviestPRs, exercises] = await Promise.all([
     getScheduledDay(today),
     getActiveSession(),
     computeWorkoutStreak(),
@@ -53,7 +58,17 @@ export async function buildPartnerContext(now: Date): Promise<PartnerContext> {
     getStepsForDate(today),
     getLatestBodyWeight(),
     getMostRecentPR(),
+    getAllPRsByType("heaviest_weight"),
+    getAllExercises(),
   ]);
+
+  const exerciseNameById = new Map(exercises.map((e) => [e.id, e.name]));
+  const bestLifts = heaviestPRs
+    .filter((pr) => !pr.isBaseline && pr.weightKg != null)
+    .map((pr) => ({ exerciseName: exerciseNameById.get(pr.exerciseId) ?? "Unknown exercise", weightKg: pr.weightKg as number }))
+    .sort((a, b) => b.weightKg - a.weightKg);
+
+  const ageYears = settings.dateOfBirth ? differenceInYears(now, new Date(settings.dateOfBirth)) : null;
 
   let activeWorkout: PartnerContext["activeWorkout"] = null;
   if (activeSession) {
@@ -105,14 +120,25 @@ export async function buildPartnerContext(now: Date): Promise<PartnerContext> {
     latestWeightKg: latestWeight?.weightKg ?? null,
     weightTrendKg,
     goalWeightKg: settings.goalWeightKg,
+    heightCm: settings.heightCm,
+    ageYears,
+    gender: settings.gender !== "unspecified" ? settings.gender : null,
     mostRecentPR: mostRecentPRLabel,
+    bestLifts,
   };
 }
 
 /** Renders the context as plain lines for the system prompt — compact, not a full JSON dump. */
 export function describePartnerContext(ctx: PartnerContext): string {
+  const bio = [
+    ctx.ageYears != null ? `${ctx.ageYears}yo` : null,
+    ctx.gender,
+    ctx.heightCm != null ? `${ctx.heightCm}cm` : null,
+  ].filter(Boolean);
+
   const lines = [
     `Local time: ${ctx.localTimeLabel} (${ctx.timeOfDay.replace("_", " ")})`,
+    bio.length > 0 ? `Bio: ${bio.join(", ")}` : null,
     `Training goal: ${ctx.goal}`,
     `Today's plan: ${ctx.todayLabel}${ctx.isRestDayToday ? " (rest day)" : ""}`,
     ctx.activeWorkout
@@ -126,6 +152,9 @@ export function describePartnerContext(ctx: PartnerContext): string {
       ? `Latest weight: ${ctx.latestWeightKg}kg${ctx.weightTrendKg != null ? ` (${ctx.weightTrendKg >= 0 ? "+" : ""}${ctx.weightTrendKg}kg over ~2 weeks)` : ""}${ctx.goalWeightKg ? `, goal ${ctx.goalWeightKg}kg` : ""}`
       : "No body weight logged yet",
     ctx.mostRecentPR ? `Most recent personal record: ${ctx.mostRecentPR}` : "No personal records yet",
+    ctx.bestLifts.length > 0
+      ? `All-time best lifts (heaviest weight ever, any rep count):\n${ctx.bestLifts.map((l) => `- ${l.exerciseName}: ${l.weightKg}kg`).join("\n")}`
+      : "No lift records yet",
   ];
-  return lines.join("\n");
+  return lines.filter((l): l is string => l != null).join("\n");
 }
