@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_LAST_COMMIT_ISO: getLastCommitISO(),
   },
+  // Lets the dev server be reached from another device on the same network (e.g. testing the PWA
+  // on a phone via its LAN IP) — dev-only, next build/start ignores this.
+  allowedDevOrigins: ["192.168.29.6"],
 };
 
 export default nextConfig;

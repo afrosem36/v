@@ -21,7 +21,10 @@ vercel            # follow the prompts, links this folder to a Vercel project
 vercel --prod     # deploy to your production URL
 ```
 
-No environment variables or database to configure — it's a static/client app. If you want AI coaching features (session feedback, exercise explanations, pain-flag alternatives), set a `GROQ_API_KEY` in your Vercel project's environment variables — see `.env.local` locally for the same setup. Everything else works without it.
+By default it's a static/client app with no environment variables needed. Two optional features need them, both in your Vercel project's environment variables (see `.env.local` locally for the same setup) — **and note Vercel only picks up new/changed variables on the next deployment, so redeploy after adding any of these**:
+
+- **AI coaching** (session feedback, exercise explanations, the training-partner chat): set `GROQ_API_KEY` (and optionally `GROQ_MODEL`).
+- **Google sign-in**: set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from your Supabase project's Settings → API, and enable the Google provider under Authentication → Providers in the Supabase dashboard. Without these, the app runs as a single implicit local account with no login screen at all.
 
 ## What's here
 

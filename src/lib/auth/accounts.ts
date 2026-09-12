@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable } from "dexie";
 import { newId } from "@/lib/utils/id";
-import { LEGACY_DB_NAME, DEXIE_CLOUD_URL, closeTrainingDb, currentTrainingDbName, type VshapeDB } from "@/lib/db/db";
+import { LEGACY_DB_NAME, closeTrainingDb, currentTrainingDbName, type VshapeDB } from "@/lib/db/db";
+import { supabase } from "@/lib/supabase/client";
 import type { KnownAccount } from "./types";
 
 /**
@@ -14,6 +15,9 @@ class AccountsDB extends Dexie {
   constructor() {
     super("vshape-accounts");
     this.version(1).stores({ known: "id, &email, lastLoginAt" });
+    // v2: keyed by the Supabase auth user id instead of email — Google accounts are looked up by a
+    // stable id, which (unlike email) can never change out from under a signed-in session.
+    this.version(2).stores({ known: "id, &userId, lastLoginAt" });
   }
 }
 
@@ -23,34 +27,39 @@ export async function listKnownAccounts(): Promise<KnownAccount[]> {
   return accountsDb.known.orderBy("lastLoginAt").reverse().toArray();
 }
 
-export async function findKnownAccountByEmail(email: string): Promise<KnownAccount | undefined> {
-  return accountsDb.known.where("email").equals(email.trim().toLowerCase()).first();
+export async function findKnownAccountByUserId(userId: string): Promise<KnownAccount | undefined> {
+  return accountsDb.known.where("userId").equals(userId).first();
 }
 
 /**
  * The first account on a device adopts the original "vshape" database name, which is how
  * training data logged before accounts existed survives the upgrade. Every account after that
- * gets a fresh, isolated database name — chosen before the person's email is even known, since
- * Dexie Cloud's own login (not this app) is what proves which email it belongs to.
+ * gets a fresh, isolated database name.
+ *
+ * Only rows with a `userId` count as "taken" — a row from the old email/password system (pre
+ * Google/Supabase) has no `userId` at all (it predates that field), and treating it as a live
+ * claim on "vshape" is exactly what silently handed a brand-new empty database to the first
+ * Google sign-in on a device that already had real local training data. Those old rows are dead
+ * weight now (the identity they pointed to no longer authenticates), so they're ignored here.
  */
 export async function nextDbName(): Promise<string> {
-  const taken = new Set((await listKnownAccounts()).map((a) => a.dbName));
+  const accounts = await listKnownAccounts();
+  const taken = new Set(accounts.filter((a) => a.userId).map((a) => a.dbName));
   if (!taken.has(LEGACY_DB_NAME)) return LEGACY_DB_NAME;
   return `vshape-${newId("u").slice(2)}`;
 }
 
-/** Called once db.cloud.currentUser resolves with a verified email for the given local database. */
-export async function rememberAccount(email: string, name: string, dbName: string): Promise<KnownAccount> {
-  const normalized = email.trim().toLowerCase();
-  const existing = await findKnownAccountByEmail(normalized);
+/** Called once Supabase resolves a signed-in user for the given local database. */
+export async function rememberAccount(userId: string, email: string, name: string, dbName: string): Promise<KnownAccount> {
+  const existing = await findKnownAccountByUserId(userId);
   const now = new Date().toISOString();
 
   if (existing) {
-    await accountsDb.known.update(existing.id, { name, dbName, lastLoginAt: now });
-    return { ...existing, name, dbName, lastLoginAt: now };
+    await accountsDb.known.update(existing.id, { email, name, dbName, lastLoginAt: now });
+    return { ...existing, email, name, dbName, lastLoginAt: now };
   }
 
-  const account: KnownAccount = { id: newId("acct"), email: normalized, name, dbName, lastLoginAt: now };
+  const account: KnownAccount = { id: newId("acct"), userId, email, name, dbName, lastLoginAt: now };
   await accountsDb.known.add(account);
   return account;
 }
@@ -59,51 +68,24 @@ export async function touchLastLogin(id: string): Promise<void> {
   await accountsDb.known.update(id, { lastLoginAt: new Date().toISOString() });
 }
 
-/** Removes the device shortcut only — does not touch the account's real data in Dexie Cloud. */
+/** Removes the device shortcut only — does not touch the account's real data anywhere else. */
 export async function forgetKnownAccount(id: string): Promise<void> {
   await accountsDb.known.delete(id);
 }
 
 /**
- * Full account deletion: removes the Postgres accounts row (password re-checked server-side —
- * this is what actually frees the email up for reuse), removes the person's Dexie Cloud account
- * and data, then clears the local copy. `db` must be the specific account's open, logged-in
- * VshapeDB instance — its own currentUser carries the token the Dexie Cloud call needs.
+ * Wipes this device's copy of the account's training data and signs out of Supabase. This does
+ * NOT delete the underlying Supabase auth identity — Supabase's client SDK has no "delete my own
+ * account" call; that needs a server-side call with the service-role key, which is a deliberately
+ * out-of-scope addition for this pass (see the Google/Supabase migration plan's Phase 1 notes).
+ * Until that exists, "Delete account" only clears this device; the person can still sign back in
+ * with the same Google account afterward.
  */
-export async function deleteAccountEverywhere(db: VshapeDB, knownAccountId: string, email: string, password: string): Promise<{ ok: boolean; error?: string }> {
-  // No Dexie Cloud configured means no Postgres account and no password to check either — just
-  // wipe the single local database, matching the original pre-accounts behavior.
-  if (!DEXIE_CLOUD_URL) {
-    await Dexie.delete(db.name);
-    closeTrainingDb();
-    return { ok: true };
-  }
-
-  const res = await fetch("/api/auth/delete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    return { ok: false, error: body.error ?? "Couldn't verify your password." };
-  }
-
-  const user = db.cloud?.currentUser.value;
-  if (user?.userId && user?.accessToken) {
-    await fetch(`${DEXIE_CLOUD_URL}/users/${user.userId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${user.accessToken}` },
-    }).catch(() => {
-      // Best-effort: if the server call fails, still remove the local copy below rather than
-      // stranding the user unable to leave their own device.
-    });
-    await db.cloud.logout({ force: true }).catch(() => {});
-  }
-
+export async function deleteAccountEverywhere(db: VshapeDB, knownAccountId: string): Promise<{ ok: boolean; error?: string }> {
   const dbName = db.name;
   if (currentTrainingDbName() === dbName) closeTrainingDb();
   await Dexie.delete(dbName);
   await forgetKnownAccount(knownAccountId);
+  if (supabase) await supabase.auth.signOut().catch(() => {});
   return { ok: true };
 }

@@ -1,6 +1,4 @@
 import Dexie, { type EntityTable } from "dexie";
-import dexieCloud from "dexie-cloud-addon";
-import { takePendingCredentials } from "@/lib/auth/passwordBridge";
 import type {
   MuscleGroup,
   Equipment,
@@ -26,31 +24,10 @@ import type {
 
 /**
  * Every account gets its own IndexedDB database, so two people sharing a phone never see
- * each other's training even if Dexie Cloud's own logout doesn't purge a shared local cache.
- * The first account keeps the original "vshape" name, which is what makes pre-accounts data
- * carry over untouched.
+ * each other's training even if signing out doesn't purge a shared local cache. The first account
+ * keeps the original "vshape" name, which is what makes pre-accounts data carry over untouched.
  */
 export const LEGACY_DB_NAME = "vshape";
-
-/**
- * The public sync endpoint from `npx dexie-cloud create` (see dexie-cloud.json). Not a secret —
- * the real secret is dexie-cloud.key, which never leaves the machine that ran the CLI and is
- * never read by this app. Undefined in any environment where sync hasn't been set up yet, in
- * which case the app runs exactly as it did before: fully local, no login required.
- */
-export const DEXIE_CLOUD_URL = process.env.NEXT_PUBLIC_DEXIE_CLOUD_URL || null;
-
-/**
- * Stock reference data (the exercise/equipment/muscle library) is identical bundled JSON on
- * every device and is re-seeded locally by ensureSeeded() — round-tripping it through the cloud
- * would just burn the free tier's request-rate limit and 100MB storage cap for no benefit.
- * Progress photos stay local for the same storage-budget reason (Dexie Cloud does support
- * syncing Blobs, but photos are the one table that could actually blow through a free-tier
- * quota) plus a privacy-by-default argument: body photos staying off any server unless the user
- * explicitly asks otherwise is the safer default. Custom exercises are real user data and sync
- * via their own small table instead (see customExercises + seed/index.ts materialization).
- */
-const UNSYNCED_TABLES = ["muscleGroups", "equipment", "exercises", "progressPhotos"];
 
 export class VshapeDB extends Dexie {
   muscleGroups!: EntityTable<MuscleGroup, "id">;
@@ -77,7 +54,7 @@ export class VshapeDB extends Dexie {
   partnerMessages!: EntityTable<PartnerMessage, "id">;
 
   constructor(name: string) {
-    super(name, DEXIE_CLOUD_URL ? { addons: [dexieCloud] } : undefined);
+    super(name);
     this.version(1).stores({
       muscleGroups: "id, key",
       equipment: "id, key",
@@ -118,31 +95,49 @@ export class VshapeDB extends Dexie {
     this.version(5).stores({
       partnerMessages: "id, createdAt",
     });
-
-    if (DEXIE_CLOUD_URL) {
-      this.cloud.configure({
-        databaseUrl: DEXIE_CLOUD_URL,
-        requireAuth: true,
-        unsyncedTables: UNSYNCED_TABLES,
-        // Bridges our own email+password to Dexie Cloud: verifies the password server-side
-        // (see /api/auth/token) and only then mints a real Dexie Cloud session for it. Providing
-        // this replaces Dexie's own built-in email-code login entirely — it's never shown.
-        fetchTokens: async ({ public_key }) => {
-          const credentials = takePendingCredentials();
-          if (!credentials) throw new Error("Not signed in.");
-          const res = await fetch("/api/auth/token", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: credentials.email, password: credentials.password, publicKey: public_key }),
-          });
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            throw new Error(body.error ?? "Sign-in failed.");
+    // v6: dailySteps/bodyWeights/bodyMeasurements/scheduleOverrides/exerciseNotes used `&field`
+    // (unique) indexes on date/exerciseId. That's enforced locally, including against rows Dexie
+    // Cloud's sync engine merges in from another device — so two devices logging the same date
+    // before either had synced turned an ordinary, self-resolving race into a permanent
+    // ConstraintError that broke the sync queue (`dailySteps.bulkPut(): ... does not satisfy the
+    // uniqueness requirements`). Dropping `&` makes these plain indexes; findOneDeduped()
+    // (repo/dedupe.ts) is what now enforces "one row per key" at the application layer instead,
+    // by keeping the most recently touched duplicate and deleting the rest. The upgrade below
+    // cleans out any duplicates already stuck from a past crash.
+    this.version(6)
+      .stores({
+        bodyWeights: "id, date",
+        bodyMeasurements: "id, date",
+        dailySteps: "id, date",
+        scheduleOverrides: "id, date",
+        exerciseNotes: "id, exerciseId",
+      })
+      .upgrade(async (tx) => {
+        const dedupeTable = async (tableName: string, key: string) => {
+          const table = tx.table(tableName);
+          const rows: Array<Record<string, unknown>> = await table.toArray();
+          const byKey = new Map<string, Array<Record<string, unknown>>>();
+          for (const row of rows) {
+            const k = String(row[key]);
+            const list = byKey.get(k) ?? [];
+            list.push(row);
+            byKey.set(k, list);
           }
-          return res.json();
-        },
+          for (const group of byKey.values()) {
+            if (group.length <= 1) continue;
+            group.sort((a, b) =>
+              String(b.updatedAt ?? b.createdAt ?? "").localeCompare(String(a.updatedAt ?? a.createdAt ?? ""))
+            );
+            const extras = group.slice(1);
+            await table.bulkDelete(extras.map((r) => r.id as string));
+          }
+        };
+        await dedupeTable("bodyWeights", "date");
+        await dedupeTable("bodyMeasurements", "date");
+        await dedupeTable("dailySteps", "date");
+        await dedupeTable("scheduleOverrides", "date");
+        await dedupeTable("exerciseNotes", "exerciseId");
       });
-    }
   }
 }
 

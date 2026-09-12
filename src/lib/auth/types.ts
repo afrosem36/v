@@ -3,14 +3,17 @@ import type { Gender, Id, TrainingGoal } from "@/types/domain";
 export type { Gender };
 
 /**
- * A device-local pointer to an account this browser has used before — just enough to draw a
- * "continue as..." chip without opening every candidate database. It is NOT a security
- * boundary: identity is proven by Dexie Cloud's own email-code login (see db.cloud in db.ts),
- * never by anything stored here. Losing or tampering with this row only loses the shortcut, not
- * access to anyone's data.
+ * A device-local pointer to a Supabase-authenticated identity this browser has used before —
+ * just enough to know which local IndexedDB database belongs to which signed-in user, and to draw
+ * a "signed in as..." label without opening every candidate database. It is NOT a security
+ * boundary: identity is proven by Supabase's own session (see supabase.auth in
+ * src/lib/supabase/client.ts), never by anything stored here. Losing or tampering with this row
+ * only loses the local pointer, not access to anyone's data.
  */
 export interface KnownAccount {
   id: Id;
+  /** The Supabase auth user id — stable even if the person's Google email ever changes. */
+  userId: string;
   email: string;
   name: string;
   dbName: string;

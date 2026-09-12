@@ -1,12 +1,13 @@
 import { db } from "@/lib/db/db";
 import { newId } from "@/lib/utils/id";
+import { findOneDeduped } from "@/lib/db/repo/dedupe";
 import type { BodyWeight, BodyMeasurement, DailySteps, PhotoAngle, ProgressPhoto } from "@/types/domain";
 
 // ---------------- Steps ----------------
 
 export async function upsertDailySteps(date: string, steps: number): Promise<void> {
   const now = new Date().toISOString();
-  const existing = await db.dailySteps.where("date").equals(date).first();
+  const existing = await findOneDeduped(db.dailySteps, "date", date);
   if (existing) {
     await db.dailySteps.update(existing.id, { steps, updatedAt: now });
   } else {
@@ -19,7 +20,7 @@ export async function getStepsInRange(startDate: string, endDate: string): Promi
 }
 
 export async function getStepsForDate(date: string): Promise<DailySteps | undefined> {
-  return db.dailySteps.where("date").equals(date).first();
+  return findOneDeduped(db.dailySteps, "date", date);
 }
 
 export function averageSteps(entries: DailySteps[]): number {
@@ -35,7 +36,7 @@ export async function upsertBodyWeight(
   notes: string | null,
   bodyFatPercent?: number | null
 ): Promise<void> {
-  const existing = await db.bodyWeights.where("date").equals(date).first();
+  const existing = await findOneDeduped(db.bodyWeights, "date", date);
   if (existing) {
     const patch: Partial<BodyWeight> = { weightKg, notes };
     if (bodyFatPercent !== undefined) patch.bodyFatPercent = bodyFatPercent;
@@ -83,7 +84,7 @@ export async function upsertBodyMeasurement(
   date: string,
   values: Pick<BodyMeasurement, "waistCm" | "chestCm" | "armsCm" | "thighsCm">
 ): Promise<void> {
-  const existing = await db.bodyMeasurements.where("date").equals(date).first();
+  const existing = await findOneDeduped(db.bodyMeasurements, "date", date);
   if (existing) {
     await db.bodyMeasurements.update(existing.id, values);
   } else {

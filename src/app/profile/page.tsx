@@ -4,13 +4,13 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, LogOut, UserRound, Trash2, RefreshCw, ChevronRight, Users } from "lucide-react";
+import { ChevronLeft, LogOut, UserRound, Trash2, RefreshCw, ChevronRight } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { NumberStepper } from "@/components/ui/NumberStepper";
 import { useAuth } from "@/lib/auth/AuthProvider";
 import { deleteAccountEverywhere } from "@/lib/auth/accounts";
-import { DEXIE_CLOUD_URL } from "@/lib/db/db";
+import { SUPABASE_CONFIGURED } from "@/lib/supabase/client";
 import { GOALS } from "@/lib/coach/goals";
 import { getSettings, updateSettings } from "@/lib/db/repo/settings";
 import { getLatestBodyWeight, upsertBodyWeight } from "@/lib/db/repo/body";
@@ -27,7 +27,7 @@ const inputClass =
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, db, signOut, switchAccount, knownAccounts } = useAuth();
+  const { user, db, signOut } = useAuth();
 
   const data = useLiveQuery(async () => {
     const [settings, weight, counts, completed] = await Promise.all([
@@ -47,7 +47,6 @@ export default function ProfilePage() {
   const [goal, setGoal] = useState<TrainingGoal | null>(user.goal);
   const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deletePassword, setDeletePassword] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -69,13 +68,13 @@ export default function ProfilePage() {
   }
 
   async function handleDeleteAccount() {
-    if (!confirm(`Delete ${user.email} and every workout logged under it? This cannot be undone.`)) return;
+    if (!confirm(`Delete every workout logged on this device? This cannot be undone.`)) return;
     setDeleteError(null);
     setDeleteBusy(true);
     try {
-      const result = await deleteAccountEverywhere(db, user.knownAccountId, user.email, deletePassword);
+      const result = await deleteAccountEverywhere(db, user.knownAccountId);
       if (!result.ok) {
-        setDeleteError(result.error ?? "Couldn't verify your password.");
+        setDeleteError(result.error ?? "Something went wrong.");
         return;
       }
       window.location.reload();
@@ -241,33 +240,6 @@ export default function ProfilePage() {
         </Button>
       </Card>
 
-      {DEXIE_CLOUD_URL && (
-        <Card>
-          <div className="flex items-center gap-2">
-            <Users size={16} className="text-text-muted" />
-            <CardLabel>Switch account</CardLabel>
-          </div>
-          <p className="mt-1 text-xs text-text-muted">Sign in with a different email on this device — each keeps its own training.</p>
-          <div className="mt-3 flex flex-col gap-2">
-            {knownAccounts
-              .filter((a) => a.id !== user.knownAccountId)
-              .map((a) => (
-                <button
-                  key={a.id}
-                  onClick={() => switchAccount({ emailHint: a.email })}
-                  className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-left text-sm"
-                >
-                  <div className="font-medium">{a.name || a.email}</div>
-                  <div className="text-xs text-text-muted">{a.email}</div>
-                </button>
-              ))}
-            <Button variant="secondary" onClick={() => switchAccount({})}>
-              Add another account
-            </Button>
-          </div>
-        </Card>
-      )}
-
       <Button variant="secondary" fullWidth onClick={signOut}>
         <LogOut size={16} />
         Sign out
@@ -276,9 +248,8 @@ export default function ProfilePage() {
       <Card className="border-danger/30">
         <CardLabel>Danger Zone</CardLabel>
         <p className="mt-1 text-xs text-text-muted">
-          {DEXIE_CLOUD_URL
-            ? "Permanently removes this account and every workout logged under it, everywhere."
-            : "Permanently removes every workout logged on this device."}
+          Permanently removes every workout logged on this device
+          {SUPABASE_CONFIGURED ? " and signs you out. You can sign back in with the same Google account." : "."}
         </p>
 
         {!confirmingDelete ? (
@@ -288,16 +259,6 @@ export default function ProfilePage() {
           </Button>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
-            {DEXIE_CLOUD_URL && (
-              <input
-                type="password"
-                value={deletePassword}
-                onChange={(e) => setDeletePassword(e.target.value)}
-                placeholder="Confirm your password"
-                autoComplete="current-password"
-                className={inputClass}
-              />
-            )}
             {deleteError && <div className="text-xs text-danger">{deleteError}</div>}
             <div className="flex gap-2">
               <Button
@@ -305,18 +266,12 @@ export default function ProfilePage() {
                 fullWidth
                 onClick={() => {
                   setConfirmingDelete(false);
-                  setDeletePassword("");
                   setDeleteError(null);
                 }}
               >
                 Cancel
               </Button>
-              <Button
-                variant="danger"
-                fullWidth
-                disabled={deleteBusy || (!!DEXIE_CLOUD_URL && !deletePassword)}
-                onClick={handleDeleteAccount}
-              >
+              <Button variant="danger" fullWidth disabled={deleteBusy} onClick={handleDeleteAccount}>
                 {deleteBusy ? "Deleting…" : "Confirm delete"}
               </Button>
             </div>

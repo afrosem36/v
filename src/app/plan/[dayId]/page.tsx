@@ -24,6 +24,7 @@ import {
   renameWorkoutDay,
 } from "@/lib/db/repo/workouts";
 import { getExercisesByIds, getExercisesByPrimaryMuscle, getAllExercises } from "@/lib/db/repo/exercises";
+import { dayOfWeekOf, DOW_SHORT } from "@/lib/utils/date";
 import type { Exercise, WorkoutDayExercise, MuscleGroupKey } from "@/types/domain";
 
 const MUSCLE_LABELS: Record<MuscleGroupKey, string> = {
@@ -73,9 +74,14 @@ export default function PlanDayPage({ params }: { params: Promise<{ dayId: strin
   if (!data) return <div className="p-5 pt-[calc(1.5rem+var(--safe-top))] text-sm text-text-muted">Loading…</div>;
 
   /**
-   * Starts THIS day's routine today, whatever weekday it is in the plan. An unfinished session
-   * used to silently swallow the tap and reopen itself — which is how picking Wednesday landed
-   * you back in Tuesday's workout.
+   * Starts THIS day's routine today, whatever weekday it is in the plan — e.g. catching up on a
+   * missed Thursday from Friday, or getting ahead on Monday's early. Doing that never touches any
+   * other day's own completion: sessions are tracked by when they actually happened
+   * (`startedAt`/`scheduledDate`), so finishing a catch-up session today doesn't mark today's own
+   * scheduled day done, and vice versa — both can be done independently, in either order.
+   *
+   * An unfinished session used to silently swallow the tap and reopen itself — which is how
+   * picking Wednesday landed you back in Tuesday's workout.
    */
   async function handleStart() {
     if (starting || !data) return;
@@ -84,6 +90,10 @@ export default function PlanDayPage({ params }: { params: Promise<{ dayId: strin
     if (activeSession && activeSession.workoutDayId === day.id) {
       router.push(`/workout/active?session=${activeSession.id}`);
       return;
+    }
+
+    if (day.dayOfWeek !== dayOfWeekOf(new Date())) {
+      if (!confirm(`Continue with "${day.label}"? It's usually scheduled for ${DOW_SHORT[day.dayOfWeek]}, not today.`)) return;
     }
 
     if (activeSession) {

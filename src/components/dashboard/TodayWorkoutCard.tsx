@@ -2,16 +2,51 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useLiveQuery } from "dexie-react-hooks";
+import { motion } from "framer-motion";
 import { Clock, CalendarSync, Dumbbell } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { BottomSheet } from "@/components/ui/BottomSheet";
 import { ChooseWorkoutSheet } from "@/components/workout/ChooseWorkoutSheet";
-import { startWorkoutForDay } from "@/lib/db/repo/workouts";
+import { getWorkoutDayExercises, startWorkoutForDay } from "@/lib/db/repo/workouts";
+import { resolveAvailableExercise } from "@/lib/db/repo/exercises";
 import { formatDuration } from "@/lib/utils/format";
 import type { WorkoutDay } from "@/types/domain";
 
 const TIME_BUDGETS = [20, 30, 45, 60];
+
+const UNIT_LABEL = { reps: "reps", seconds: "sec", minutes: "min" } as const;
+
+/** Fade-and-rise entrance, one exercise after another — purely decorative, no data implications. */
+const listVariants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { staggerChildren: 0.06 } },
+};
+const itemVariants = {
+  hidden: { opacity: 0, y: 8 },
+  visible: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 24 } },
+};
+
+/** Today's planned exercises, equipment-substitution-aware — same resolution the active workout screen uses. */
+function useTodayExercisePreview(dayId: string | undefined) {
+  return useLiveQuery(async () => {
+    if (!dayId) return [];
+    const dayExercises = await getWorkoutDayExercises(dayId);
+    const resolved = await Promise.all(dayExercises.map((de) => resolveAvailableExercise(de.exerciseId)));
+    return dayExercises
+      .map((de, i) => {
+        const exercise = resolved[i]?.exercise;
+        if (!exercise) return null;
+        const repMin = de.repRangeMin || exercise.repRangeMin;
+        const repMax = de.repRangeMax || exercise.repRangeMax;
+        const unit = UNIT_LABEL[exercise.repUnit];
+        const reps = repMin === repMax ? `${repMin}` : `${repMin}–${repMax}`;
+        return { id: de.id, name: exercise.name, detail: `${de.targetSets} × ${reps} ${unit}` };
+      })
+      .filter((e) => e != null);
+  }, [dayId]);
+}
 
 interface TodayWorkoutCardProps {
   today: WorkoutDay | undefined;
@@ -25,6 +60,7 @@ export function TodayWorkoutCard({ today, estimatedMinutes, rescheduled }: Today
   const [sheetOpen, setSheetOpen] = useState(false);
   const [chooseOpen, setChooseOpen] = useState(false);
   const [starting, setStarting] = useState(false);
+  const preview = useTodayExercisePreview(today && !today.isRestDay ? today.id : undefined);
 
   async function handleStart(budgetMinutes: number | null) {
     if (!today || starting) return;
@@ -67,6 +103,27 @@ export function TodayWorkoutCard({ today, estimatedMinutes, rescheduled }: Today
         <Clock size={14} />
         Estimated {formatDuration(estimatedMinutes)}
       </div>
+
+      {preview && preview.length > 0 && (
+        <motion.ul role="list" className="mt-3 flex flex-col gap-1.5" initial="hidden" animate="visible" variants={listVariants}>
+          {preview.map((e) => (
+            <motion.li
+              key={e.id}
+              role="listitem"
+              className="flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2"
+              variants={itemVariants}
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface text-text-muted">
+                <Dumbbell size={14} />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{e.name}</div>
+                <div className="text-xs text-text-muted">{e.detail}</div>
+              </div>
+            </motion.li>
+          ))}
+        </motion.ul>
+      )}
 
       <Button className="mt-4" fullWidth size="lg" disabled={starting} onClick={() => handleStart(null)}>
         Start Workout

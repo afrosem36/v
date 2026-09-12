@@ -1,5 +1,6 @@
 import { db } from "@/lib/db/db";
 import { newId } from "@/lib/utils/id";
+import { findOneDeduped } from "@/lib/db/repo/dedupe";
 import { dateStr, dayOfWeekOf, todayStr } from "@/lib/utils/date";
 import { evaluateAndSavePRs, rebuildPRsForExercise } from "@/lib/db/repo/records";
 import { getSettings, markPlanCustomized, updateSettings } from "@/lib/db/repo/settings";
@@ -39,7 +40,7 @@ export async function getTodayWorkoutDay(): Promise<WorkoutDay | undefined> {
 // ---------------- Schedule overrides ----------------
 
 export async function getScheduleOverride(date: string): Promise<ScheduleOverride | undefined> {
-  return db.scheduleOverrides.where("date").equals(date).first();
+  return findOneDeduped(db.scheduleOverrides, "date", date);
 }
 
 /** Pins one calendar date to a routine (or to rest, with null) without touching the weekly plan. */

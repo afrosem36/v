@@ -1,149 +1,44 @@
 "use client";
 
-import { useState } from "react";
-import { Eye, EyeOff } from "lucide-react";
-import type { KnownAccount } from "@/lib/auth/types";
-
-const inputClass =
-  "h-12 w-full rounded-xl border border-border bg-surface-2 px-4 text-base outline-none placeholder:text-text-faint focus:border-accent";
-
-function PasswordField({
-  value,
-  onChange,
-  placeholder,
-  autoComplete,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-  autoComplete: string;
-}) {
-  const [visible, setVisible] = useState(false);
-  return (
-    <div className="relative">
-      <input
-        type={visible ? "text" : "password"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete={autoComplete}
-        className={`${inputClass} pr-12`}
-      />
-      <button
-        type="button"
-        onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? "Hide password" : "Show password"}
-        className="absolute right-1 top-1 flex h-10 w-10 items-center justify-center rounded-lg text-text-muted active:bg-surface"
-      >
-        {visible ? <EyeOff size={18} /> : <Eye size={18} />}
-      </button>
-    </div>
-  );
-}
-
 interface SignedOutScreenProps {
-  knownAccounts: KnownAccount[];
-  /** Pre-fills the email field — set after a silent session-resume attempt fails, so the person
-   * doesn't have to retype an email they've already used on this device. */
-  prefillEmail: string;
-  onSignIn: (email: string, password: string) => Promise<void>;
-  onSignUp: (email: string, password: string) => Promise<void>;
+  onSignIn: () => void;
+  busy: boolean;
+  error: string | null;
 }
 
-export function SignedOutScreen({ knownAccounts, prefillEmail, onSignIn, onSignUp }: SignedOutScreenProps) {
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
-  const [email, setEmail] = useState(prefillEmail);
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (busy) return;
-    setError(null);
-
-    if (mode === "signup" && password !== confirm) {
-      setError("Those passwords don't match.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      if (mode === "signin") await onSignIn(email, password);
-      else await onSignUp(email, password);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
+/** Google is the only identity provider now — this is just the door, not a form. */
+export function SignedOutScreen({ onSignIn, busy, error }: SignedOutScreenProps) {
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col justify-center gap-5 px-6 pb-10">
-      <div className="text-center">
+    <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-center gap-6 px-6 pb-10 text-center">
+      <div>
         <h1 className="text-2xl font-bold tracking-tight">Vshape</h1>
-        <p className="mt-1 text-sm text-text-muted">
-          {mode === "signin" ? "Sign in to your training log" : "Create your account"}
-        </p>
+        <p className="mt-1 text-sm text-text-muted">Sign in to your training log</p>
       </div>
 
-      {knownAccounts.length > 0 && mode === "signin" && (
-        <div className="flex flex-wrap justify-center gap-2">
-          {knownAccounts.map((account) => (
-            <button
-              key={account.id}
-              type="button"
-              onClick={() => setEmail(account.email)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                email === account.email ? "border-accent bg-accent/10 text-text" : "border-border bg-surface-2 text-text-muted"
-              }`}
-            >
-              {account.email}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <input
-          type="email"
-          inputMode="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@example.com"
-          autoComplete="username"
-          className={inputClass}
-        />
-        <PasswordField
-          value={password}
-          onChange={setPassword}
-          placeholder={mode === "signup" ? "Create a password" : "Password"}
-          autoComplete={mode === "signup" ? "new-password" : "current-password"}
-        />
-        {mode === "signup" && (
-          <PasswordField value={confirm} onChange={setConfirm} placeholder="Confirm password" autoComplete="new-password" />
-        )}
-
-        {error && <div className="rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs text-danger">{error}</div>}
-
-        <button
-          type="submit"
-          disabled={busy || !email || !password || (mode === "signup" && !confirm)}
-          className="h-14 w-full rounded-2xl bg-accent text-base font-semibold text-accent-foreground disabled:opacity-40"
-        >
-          {busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
-        </button>
-      </form>
+      {error && <div className="w-full rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs text-danger">{error}</div>}
 
       <button
-        onClick={() => {
-          setMode(mode === "signin" ? "signup" : "signin");
-          setError(null);
-        }}
-        className="text-center text-sm font-medium text-text-muted active:text-text"
+        type="button"
+        onClick={onSignIn}
+        disabled={busy}
+        className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl border border-border bg-surface-2 text-base font-semibold disabled:opacity-40"
       >
-        {mode === "signin" ? "New here? Create an account" : "I already have an account"}
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            fill="#4285F4"
+            d="M19.6 10.23c0-.68-.06-1.32-.17-1.94H10v3.68h5.4a4.6 4.6 0 0 1-2 3.02v2.5h3.23c1.9-1.75 2.97-4.32 2.97-7.26Z"
+          />
+          <path
+            fill="#34A853"
+            d="M10 20c2.7 0 4.96-.9 6.62-2.44l-3.23-2.5c-.9.6-2.04.96-3.4.96-2.6 0-4.8-1.76-5.6-4.12H1.06v2.58A10 10 0 0 0 10 20Z"
+          />
+          <path fill="#FBBC05" d="M4.4 11.9a6 6 0 0 1 0-3.8V5.52H1.06a10 10 0 0 0 0 8.96l3.34-2.58Z" />
+          <path
+            fill="#EA4335"
+            d="M10 3.98c1.47 0 2.8.5 3.83 1.5l2.87-2.87A9.6 9.6 0 0 0 10 0 10 10 0 0 0 1.06 5.52L4.4 8.1C5.2 5.74 7.4 3.98 10 3.98Z"
+          />
+        </svg>
+        {busy ? "Signing you in…" : "Continue with Google"}
       </button>
 
       <p className="text-center text-xs text-text-faint">Everything you log stays yours — Vshape has no ads, no tracking, no data resale.</p>
