@@ -55,37 +55,45 @@ export function registerSyncHooks(instance: VshapeDB): void {
     table.hook("creating", (primKey) => {
       const rowId = String(primKey);
       if (isSuppressed(rowId)) return;
-      void enqueue(instance, tableName, rowId, "upsert");
+      enqueue(instance, tableName, rowId, "upsert");
     });
 
     table.hook("updating", (_mods, primKey) => {
       const rowId = String(primKey);
       if (isSuppressed(rowId)) return;
-      void enqueue(instance, tableName, rowId, "upsert");
+      enqueue(instance, tableName, rowId, "upsert");
     });
 
     table.hook("deleting", (primKey) => {
       const rowId = String(primKey);
       if (isSuppressed(rowId)) return;
-      void enqueue(instance, tableName, rowId, "delete");
+      enqueue(instance, tableName, rowId, "delete");
     });
   }
 }
 
-async function enqueue(instance: VshapeDB, tableName: SyncedTableName, rowId: string, op: "upsert" | "delete"): Promise<void> {
+function enqueue(instance: VshapeDB, tableName: SyncedTableName, rowId: string, op: "upsert" | "delete"): void {
   const entry: OutboxEntry = { id: `${tableName}:${rowId}`, tableName, rowId, op, ts: new Date().toISOString() };
-  // Dexie propagates its "current transaction" ambiently through the Promise chain that's running
-  // it, including into code called from inside a creating/updating/deleting hook. Repo functions
-  // almost never open a transaction that includes syncOutbox (e.g. db.exerciseSets.add(set) is
-  // scoped to exerciseSets alone) — without Dexie.ignoreTransaction, the put() below would try to
-  // enlist in that ambient transaction and throw ("table syncOutbox not part of transaction"),
-  // which the try/catch here would previously have swallowed silently, so every single enqueue
-  // attempt failed without ever surfacing an error. ignoreTransaction() makes this a genuinely
-  // independent write with its own transaction, as Dexie's own docs prescribe for exactly this.
-  try {
-    await Dexie.ignoreTransaction(() => instance.table("syncOutbox").put(entry));
-    notifyLocalWrite();
-  } catch {
-    // best-effort — never let outbox bookkeeping break the actual write it's tracking
-  }
+  // Dexie propagates its ambient zone — both the current TRANSACTION and, separately, a "this code
+  // is running inside a useLiveQuery querier, read-only" flag — through the Promise microtask
+  // chain that's running whatever triggered this hook, including into code called from inside a
+  // creating/updating/deleting hook. Two escapes are needed, not one:
+  //  - Dexie.ignoreTransaction alone escapes the ambient transaction (repo functions rarely open
+  //    one that includes syncOutbox — db.exerciseSets.add(set) is scoped to exerciseSets alone —
+  //    so without it this put() would throw "table syncOutbox not part of transaction").
+  //  - It does NOT escape Dexie's liveQuery read-only tracking, though: if the write that
+  //    triggered this hook happened to run while some useLiveQuery's querier zone was still
+  //    ambient, this put() would throw "ReadOnlyError: Readwrite transaction in liveQuery context"
+  //    even with ignoreTransaction in place — hit for real once a page's dashboard liveQuery was
+  //    running at the same time as an ordinary write elsewhere (e.g. finalizeStaleSessions()).
+  //    setTimeout runs in a genuinely fresh macrotask with no ambient Dexie zone at all — Dexie's
+  //    zone propagation only rides the Promise microtask chain, never setTimeout — so scheduling
+  //    the actual write there instead of inline escapes both at once.
+  setTimeout(() => {
+    void Dexie.ignoreTransaction(() => instance.table("syncOutbox").put(entry))
+      .then(() => notifyLocalWrite())
+      .catch(() => {
+        // best-effort — never let outbox bookkeeping break the actual write it's tracking
+      });
+  }, 0);
 }
