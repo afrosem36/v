@@ -51,9 +51,9 @@ let realtimeChannel: RealtimeChannel | null = null;
 let running = false;
 let activeCycle: (() => void) | null = null;
 
-/** Triggers an immediate cycle on the currently-running engine, if any — used by the manual "sync now" button in Settings. Goes through the same bootstrap gate as the interval, so it can never leak a not-yet-resolved device's placeholder data early. */
+/** Triggers an immediate cycle on the currently-running engine, if any — used by the manual "sync now" button in Settings. Goes through the same bootstrap gate as the interval, so it can never leak a not-yet-resolved device's placeholder data early. Deferred via setTimeout for the same reason startSyncEngine's first cycle is — never assume the caller's own call stack is zone-clean. */
 export function triggerSyncNow(): void {
-  activeCycle?.();
+  if (activeCycle) setTimeout(activeCycle, 0);
 }
 
 /**
@@ -65,7 +65,7 @@ export function triggerSyncNow(): void {
  */
 export function resetBootstrapState(): void {
   setStatus({ bootstrapped: false, lastError: null });
-  activeCycle?.();
+  if (activeCycle) setTimeout(activeCycle, 0);
 }
 
 async function runCycle(instance: VshapeDB, userId: string, knownAccountId: string): Promise<void> {
@@ -146,7 +146,16 @@ export function startSyncEngine(instance: VshapeDB, userId: string, knownAccount
 
   realtimeChannel = subscribeRealtime(userId, cycle);
 
-  cycle();
+  // Deferred via setTimeout rather than called inline: startSyncEngine() runs synchronously from
+  // AuthProvider's activate(), itself a continuation of the same React mount/effect pass that's
+  // also standing up every useLiveQuery on the page (useHomeData's dashboard query among them).
+  // Calling cycle() straight away here made runCycle's writes (bootstrap's clears/pushes,
+  // pullChanges applying rows) a same-zone sibling of whichever useLiveQuery happened to still be
+  // ambient in Dexie's tracking at that exact moment — the same "ReadOnlyError: Readwrite
+  // transaction in liveQuery context" class of bug already fixed once for the outbox hook
+  // (outbox.ts), just hit here on every single app load instead of only occasionally. setTimeout
+  // starts this cycle from a genuinely fresh macrotask with no ambient Dexie zone at all.
+  setTimeout(cycle, 0);
 }
 
 export function stopSyncEngine(): void {
