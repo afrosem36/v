@@ -1,6 +1,7 @@
 import Dexie, { type Table } from "dexie";
 import type { VshapeDB } from "@/lib/db/db";
 import { SYNCED_TABLES, type SyncedTableName } from "./tables";
+import { notifyLocalWrite } from "./notify";
 
 export interface OutboxEntry {
   /** Deterministic `${tableName}:${rowId}` — repeated edits before a flush coalesce into one entry. */
@@ -12,17 +13,32 @@ export interface OutboxEntry {
 }
 
 /**
- * Set while the pull path is writing remote rows into Dexie, so the creating/updating/deleting
- * hooks below know to skip enqueueing — otherwise every pulled row would immediately re-queue
- * itself for push, in an infinite pull->push->pull loop.
+ * Tracks exactly which rows/tables are currently being written by the pull/bootstrap path, so the
+ * creating/updating/deleting hooks below know to skip enqueueing just those — otherwise a pulled
+ * row would immediately re-queue itself for push, an infinite pull->push->pull loop. Scoped this
+ * narrowly (not a single blanket "a remote write is happening somewhere" flag) so a genuine local
+ * write to an unrelated row during a pull/bootstrap's `await`s is never silently dropped.
  */
-let isApplyingRemote = false;
+const applyingRemoteKeys = new Set<string>(); // `${tableName}:${rowId}`, for individual row apply (pull.ts)
+const applyingRemoteTables = new Set<string>(); // tableName, for a whole-table clear (bootstrap.ts's FULL_REPLACE_TABLES wipe)
 
-export function withRemoteWritesSuppressed<T>(fn: () => Promise<T>): Promise<T> {
-  isApplyingRemote = true;
-  return fn().finally(() => {
-    isApplyingRemote = false;
-  });
+export async function withRemoteRowApplied(tableName: string, rowId: string, fn: () => Promise<void>): Promise<void> {
+  const key = `${tableName}:${rowId}`;
+  applyingRemoteKeys.add(key);
+  try {
+    await fn();
+  } finally {
+    applyingRemoteKeys.delete(key);
+  }
+}
+
+export async function withRemoteTableCleared(tableName: string, fn: () => Promise<void>): Promise<void> {
+  applyingRemoteTables.add(tableName);
+  try {
+    await fn();
+  } finally {
+    applyingRemoteTables.delete(tableName);
+  }
 }
 
 /**
@@ -34,20 +50,24 @@ export function withRemoteWritesSuppressed<T>(fn: () => Promise<T>): Promise<T> 
 export function registerSyncHooks(instance: VshapeDB): void {
   for (const tableName of SYNCED_TABLES) {
     const table = instance.table(tableName) as Table<{ id: string }, string>;
+    const isSuppressed = (rowId: string) => applyingRemoteTables.has(tableName) || applyingRemoteKeys.has(`${tableName}:${rowId}`);
 
     table.hook("creating", (primKey) => {
-      if (isApplyingRemote) return;
-      void enqueue(instance, tableName, String(primKey), "upsert");
+      const rowId = String(primKey);
+      if (isSuppressed(rowId)) return;
+      void enqueue(instance, tableName, rowId, "upsert");
     });
 
     table.hook("updating", (_mods, primKey) => {
-      if (isApplyingRemote) return;
-      void enqueue(instance, tableName, String(primKey), "upsert");
+      const rowId = String(primKey);
+      if (isSuppressed(rowId)) return;
+      void enqueue(instance, tableName, rowId, "upsert");
     });
 
     table.hook("deleting", (primKey) => {
-      if (isApplyingRemote) return;
-      void enqueue(instance, tableName, String(primKey), "delete");
+      const rowId = String(primKey);
+      if (isSuppressed(rowId)) return;
+      void enqueue(instance, tableName, rowId, "delete");
     });
   }
 }
@@ -64,11 +84,8 @@ async function enqueue(instance: VshapeDB, tableName: SyncedTableName, rowId: st
   // independent write with its own transaction, as Dexie's own docs prescribe for exactly this.
   try {
     await Dexie.ignoreTransaction(() => instance.table("syncOutbox").put(entry));
+    notifyLocalWrite();
   } catch {
     // best-effort — never let outbox bookkeeping break the actual write it's tracking
   }
-}
-
-export async function pendingOutboxCount(instance: VshapeDB): Promise<number> {
-  return instance.table("syncOutbox").count();
 }

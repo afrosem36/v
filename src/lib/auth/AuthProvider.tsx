@@ -14,6 +14,8 @@ import type { Gender, TrainingGoal } from "@/types/domain";
 
 export interface AuthedUser {
   knownAccountId: string;
+  /** The Supabase auth user id, or null in local-only mode (no Supabase configured). */
+  userId: string | null;
   email: string;
   name: string;
   dateOfBirth: string | null;
@@ -76,6 +78,7 @@ function LocalOnlyGate({ children }: { children: React.ReactNode }) {
     db: openTrainingDb(LEGACY_DB_NAME),
     user: {
       knownAccountId: "local",
+      userId: null,
       email: "",
       name: settings.name,
       dateOfBirth: settings.dateOfBirth,
@@ -103,6 +106,7 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = useState<Phase>("checking");
   const [database, setDatabase] = useState<VshapeDB | null>(null);
   const [knownAccountId, setKnownAccountId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
@@ -139,6 +143,7 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
       setDatabase(opened);
       setEmail(userEmail);
       setKnownAccountId(known.id);
+      setUserId(userId);
       setError(null);
       setPhase("ready");
       // Sync is always supplementary and never blocks sign-in — the same principle as the AI
@@ -174,6 +179,7 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
         activatedUserIdRef.current = null;
         setDatabase(null);
         setKnownAccountId(null);
+        setUserId(null);
         setPhase("signed-out");
         return;
       }
@@ -211,12 +217,12 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
   if (phase === "checking") return <LoadingScreen label="Loading…" />;
   if (phase === "authenticating") return <LoadingScreen label="Signing you in…" />;
 
-  if (phase === "signed-out" || !database || !knownAccountId) {
+  if (phase === "signed-out" || !database || !knownAccountId || !userId) {
     return <SignedOutScreen onSignIn={handleSignIn} busy={signingIn} error={error} />;
   }
 
   return (
-    <SupabaseReady database={database} knownAccountId={knownAccountId} email={email}>
+    <SupabaseReady database={database} knownAccountId={knownAccountId} userId={userId} email={email}>
       {children}
     </SupabaseReady>
   );
@@ -226,11 +232,13 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
 function SupabaseReady({
   database,
   knownAccountId,
+  userId,
   email,
   children,
 }: {
   database: VshapeDB;
   knownAccountId: string;
+  userId: string;
   email: string;
   children: React.ReactNode;
 }) {
@@ -246,6 +254,7 @@ function SupabaseReady({
     db: database,
     user: {
       knownAccountId,
+      userId,
       email,
       name: settings.name,
       dateOfBirth: settings.dateOfBirth,

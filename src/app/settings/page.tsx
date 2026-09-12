@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ChevronRight, Download, Upload, Trash2, UserRound, Sparkles, Dumbbell, RefreshCw } from "lucide-react";
@@ -14,18 +14,14 @@ import { setEquipmentAvailability } from "@/lib/db/repo/exercises";
 import { EQUIPMENT_SEED } from "@/lib/db/seed/equipment";
 import { exportAllDataJSON, importAllDataJSON, exportWorkoutHistoryCSV, clearAllData } from "@/lib/db/backup";
 import { downloadTextFile } from "@/lib/utils/download";
-import { todayStr } from "@/lib/utils/date";
+import { todayStr, formatTime } from "@/lib/utils/date";
 import { LastUpdated } from "@/components/LastUpdated";
 import { useAuth } from "@/lib/auth/AuthProvider";
 import { SUPABASE_CONFIGURED } from "@/lib/supabase/client";
-import { getSyncStatus, subscribeSyncStatus, triggerSyncNow, resetBootstrapState, type SyncStatus } from "@/lib/sync/engine";
-import { clearSyncBootstrapped } from "@/lib/auth/accounts";
-
-function useSyncStatus(): SyncStatus {
-  const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
-  useEffect(() => subscribeSyncStatus(setStatus), []);
-  return status;
-}
+import { useSyncStatusStore, triggerSyncNow, resetBootstrapState } from "@/lib/sync/engine";
+import { setSyncBootstrapped } from "@/lib/auth/accounts";
+import { deleteEverywhere } from "@/lib/sync/deleteEverywhere";
+import { DeleteEverywhereSheet } from "@/components/settings/DeleteEverywhereSheet";
 
 function useSettingsData() {
   return useLiveQuery(async () => {
@@ -38,17 +34,15 @@ function useSettingsData() {
 export default function SettingsPage() {
   const data = useSettingsData();
   const { user } = useAuth();
-  const syncStatus = useSyncStatus();
+  const syncStatus = useSyncStatusStore();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleteEverywhereOpen, setDeleteEverywhereOpen] = useState(false);
+  const [deletingEverywhere, setDeletingEverywhere] = useState(false);
 
   if (!data) return <div className="p-5 pt-[calc(1.5rem+var(--safe-top))] text-sm text-text-muted">Loading…</div>;
 
   const { settings, userEquipment } = data;
-
-  function handleSyncNow() {
-    triggerSyncNow();
-  }
 
   async function handleForceResync() {
     if (
@@ -57,7 +51,7 @@ export default function SettingsPage() {
       )
     )
       return;
-    await clearSyncBootstrapped(user.knownAccountId);
+    await setSyncBootstrapped(user.knownAccountId, null);
     resetBootstrapState();
   }
 
@@ -90,6 +84,17 @@ export default function SettingsPage() {
     window.location.reload();
   }
 
+  async function handleDeleteEverywhere() {
+    setDeletingEverywhere(true);
+    try {
+      if (user.userId) await deleteEverywhere(user.userId);
+      await clearAllData();
+      window.location.reload();
+    } finally {
+      setDeletingEverywhere(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4 p-5 pt-[calc(1.5rem+var(--safe-top))] pb-10">
       <div className="text-2xl font-bold tracking-tight">Settings</div>
@@ -114,7 +119,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <CardLabel>Sync</CardLabel>
             <button
-              onClick={handleSyncNow}
+              onClick={() => triggerSyncNow()}
               aria-label="Sync now"
               className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-2 border border-border active:brightness-90"
             >
@@ -127,7 +132,7 @@ export default function SettingsPage() {
               : !syncStatus.bootstrapped
                 ? "Waiting for your data to appear on another device…"
                 : syncStatus.lastSyncedAt
-                  ? `Synced across your devices · last ${new Date(syncStatus.lastSyncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                  ? `Synced across your devices · last ${formatTime(syncStatus.lastSyncedAt)}`
                   : "Waiting for first sync…"}
             {syncStatus.pendingCount > 0 && ` · ${syncStatus.pendingCount} pending`}
           </p>
@@ -326,9 +331,27 @@ export default function SettingsPage() {
         <CardLabel>Danger Zone</CardLabel>
         <Button variant="danger" fullWidth className="mt-3" onClick={handleReset}>
           <Trash2 size={16} />
-          Reset All Data
+          Reset This Device
         </Button>
+        {SUPABASE_CONFIGURED && (
+          <>
+            <p className="mt-2 text-xs text-text-muted">
+              Reset This Device only clears the copy stored here — your other signed-in devices are unaffected.
+            </p>
+            <Button variant="danger" fullWidth className="mt-2" onClick={() => setDeleteEverywhereOpen(true)}>
+              <Trash2 size={16} />
+              Delete Everywhere
+            </Button>
+          </>
+        )}
       </Card>
+
+      <DeleteEverywhereSheet
+        open={deleteEverywhereOpen}
+        busy={deletingEverywhere}
+        onClose={() => setDeleteEverywhereOpen(false)}
+        onConfirm={handleDeleteEverywhere}
+      />
 
       <p className="text-center text-xs text-text-faint">
         Vshape · Dark theme · {SUPABASE_CONFIGURED ? "Synced to your account" : "Data stored on this device"} · <LastUpdated />
