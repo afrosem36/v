@@ -1,4 +1,4 @@
-import type { Table } from "dexie";
+import Dexie, { type Table } from "dexie";
 import type { VshapeDB } from "@/lib/db/db";
 import { SYNCED_TABLES, type SyncedTableName } from "./tables";
 
@@ -54,13 +54,16 @@ export function registerSyncHooks(instance: VshapeDB): void {
 
 async function enqueue(instance: VshapeDB, tableName: SyncedTableName, rowId: string, op: "upsert" | "delete"): Promise<void> {
   const entry: OutboxEntry = { id: `${tableName}:${rowId}`, tableName, rowId, op, ts: new Date().toISOString() };
-  // Dexie's creating/updating/deleting hooks can't be awaited, and syncOutbox isn't part of the
-  // triggering write's own transaction scope — this is a separate, best-effort write right after.
-  // On the extremely rare crash between the two, the underlying write itself is never at risk,
-  // only its propagation to other devices, which the next edit (or the periodic full resync) to
-  // that row will still pick up.
+  // Dexie propagates its "current transaction" ambiently through the Promise chain that's running
+  // it, including into code called from inside a creating/updating/deleting hook. Repo functions
+  // almost never open a transaction that includes syncOutbox (e.g. db.exerciseSets.add(set) is
+  // scoped to exerciseSets alone) — without Dexie.ignoreTransaction, the put() below would try to
+  // enlist in that ambient transaction and throw ("table syncOutbox not part of transaction"),
+  // which the try/catch here would previously have swallowed silently, so every single enqueue
+  // attempt failed without ever surfacing an error. ignoreTransaction() makes this a genuinely
+  // independent write with its own transaction, as Dexie's own docs prescribe for exactly this.
   try {
-    await instance.table("syncOutbox").put(entry);
+    await Dexie.ignoreTransaction(() => instance.table("syncOutbox").put(entry));
   } catch {
     // best-effort — never let outbox bookkeeping break the actual write it's tracking
   }

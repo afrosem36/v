@@ -18,7 +18,12 @@ export type BootstrapOutcome = "joined" | "claimed" | "waiting";
  *    appSettings/workoutPlans/workoutDays/workoutDayExercises with device-random ids before this
  *    ever runs, so those are wiped first — otherwise they'd sit alongside the real pulled rows and
  *    break both "one settings row" and every id workoutSessions/exerciseSets reference. Then pull
- *    everything down. Outcome: "joined".
+ *    everything down. Finally, push this device's own pre-existing rows for every OTHER synced
+ *    table (workoutSessions, exerciseSets, bodyWeights, ...) — a device can easily have real
+ *    history of its own from before it ever synced (logged before this feature shipped, or logged
+ *    on a second device that hadn't joined yet), and that history has its own distinct row ids, so
+ *    merging it up is always additive, never a collision with what was just pulled. Outcome:
+ *    "joined".
  *
  *  - Remote is empty AND this device has real, already-onboarded data (a completed profile or at
  *    least one workout) -> nobody has synced this account yet; this device's data becomes the seed
@@ -47,6 +52,8 @@ export async function attemptBootstrap(instance: VshapeDB, userId: string): Prom
     });
     await pullChanges(instance, userId, null);
     await materializeCustomExercises();
+    const mergeUpTables = SYNCED_TABLES.filter((t) => !FULL_REPLACE_TABLES.includes(t));
+    await pushEverything(instance, userId, mergeUpTables);
     return "joined";
   }
 
