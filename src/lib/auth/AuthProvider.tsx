@@ -132,14 +132,24 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
       const opened = openTrainingDb(dbName);
       await ensureSeeded();
 
-      if (!existing?.syncBootstrappedAt) {
-        await bootstrapSyncIfNeeded(opened, userId);
+      // Sync is always supplementary — the same principle as the AI coach calls elsewhere in the
+      // app (askCoach() etc.): a failure here (missing sync_rows table, offline, RLS not set up
+      // yet) must never strand someone unable to sign in. Not marking it bootstrapped on failure
+      // means the next activation on this device retries it (idempotent either way).
+      let bootstrapped = existing?.syncBootstrappedAt ?? null;
+      if (!bootstrapped) {
+        try {
+          await bootstrapSyncIfNeeded(opened, userId);
+          bootstrapped = new Date().toISOString();
+        } catch (syncErr) {
+          console.error("Initial sync failed — continuing without it for now.", syncErr);
+        }
       }
 
       const settings = await getSettings();
       const known = await rememberAccount(userId, userEmail, settings.name || displayNameHint, dbName);
       await touchLastLogin(known.id);
-      if (!known.syncBootstrappedAt) await markSyncBootstrapped(known.id);
+      if (bootstrapped && !known.syncBootstrappedAt) await markSyncBootstrapped(known.id);
 
       activatedUserIdRef.current = userId;
       setDatabase(opened);
@@ -147,7 +157,7 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
       setKnownAccountId(known.id);
       setError(null);
       setPhase("ready");
-      startSyncEngine(opened, userId);
+      if (bootstrapped) startSyncEngine(opened, userId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong signing you in.");
       setDatabase(null);
