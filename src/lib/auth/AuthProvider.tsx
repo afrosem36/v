@@ -63,7 +63,21 @@ function LocalOnlyGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     openTrainingDb(LEGACY_DB_NAME);
-    ensureSeeded().then(() => setReady(true));
+    // Deferred via setTimeout, not called inline: ensureSeeded()'s own writes (backfilling newer
+    // AppSettings fields onto an old row, re-applying a bumped library version, materializing
+    // custom exercises — see src/lib/db/seed/index.ts) run at the exact same moment every
+    // useLiveQuery on the page is also mounting, including useHomeData's dashboard query. Dexie
+    // propagates its "this code is inside a useLiveQuery querier, read-only" tracking through the
+    // Promise microtask chain of whatever's running when a write fires, not just the current
+    // transaction — a write that inherits that tag is rejected with "ReadOnlyError: Readwrite
+    // transaction in liveQuery context", blamed on whichever querier's zone was ambient even
+    // though that querier itself never wrote anything. Same fix as every other write-on-mount
+    // path already hit by this (src/lib/sync/engine.ts, src/lib/sync/outbox.ts,
+    // src/components/AppBootstrap.tsx): setTimeout starts a genuinely fresh macrotask with no
+    // ambient Dexie zone, since Dexie's zone propagation never crosses it.
+    setTimeout(() => {
+      ensureSeeded().then(() => setReady(true));
+    }, 0);
   }, []);
 
   const settings = useLiveQuery(() => (ready ? getSettings() : undefined), [ready]);
@@ -184,7 +198,16 @@ function SupabaseAuthGate({ children }: { children: React.ReactNode }) {
         return;
       }
       if (session) {
-        void activate(session.user.id, session.user.email ?? "", googleDisplayName(session.user));
+        // Deferred via setTimeout for the same reason LocalOnlyGate's ensureSeeded() call is —
+        // activate() runs ensureSeeded() (which can itself write: backfilling settings fields,
+        // re-applying a bumped library version) and then starts the sync engine, all inline. This
+        // callback fires at the exact same moment every useLiveQuery on the page is mounting, so
+        // any write in that chain risked inheriting an ambient liveQuery zone and being rejected
+        // with "ReadOnlyError: Readwrite transaction in liveQuery context" — setTimeout escapes it
+        // by starting a genuinely fresh macrotask, since Dexie's zone propagation never crosses it.
+        const { id, email } = session.user;
+        const name = googleDisplayName(session.user);
+        setTimeout(() => void activate(id, email ?? "", name), 0);
       } else if (event === "INITIAL_SESSION") {
         setPhase("signed-out");
       }
