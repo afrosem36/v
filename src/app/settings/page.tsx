@@ -17,10 +17,8 @@ import { downloadTextFile } from "@/lib/utils/download";
 import { todayStr } from "@/lib/utils/date";
 import { LastUpdated } from "@/components/LastUpdated";
 import { useAuth } from "@/lib/auth/AuthProvider";
-import { supabase, SUPABASE_CONFIGURED } from "@/lib/supabase/client";
-import { getSyncStatus, subscribeSyncStatus, type SyncStatus } from "@/lib/sync/engine";
-import { flushOutbox } from "@/lib/sync/push";
-import { pullChanges, getSyncCursor } from "@/lib/sync/pull";
+import { SUPABASE_CONFIGURED } from "@/lib/supabase/client";
+import { getSyncStatus, subscribeSyncStatus, triggerSyncNow, type SyncStatus } from "@/lib/sync/engine";
 
 function useSyncStatus(): SyncStatus {
   const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
@@ -47,13 +45,8 @@ export default function SettingsPage() {
 
   const { settings, userEquipment } = data;
 
-  async function handleSyncNow() {
-    if (!supabase) return;
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData.user?.id;
-    if (!userId) return;
-    await flushOutbox(db, userId);
-    await pullChanges(db, userId, getSyncCursor(db.name));
+  function handleSyncNow() {
+    triggerSyncNow();
   }
 
   async function handleExportJSON() {
@@ -119,9 +112,11 @@ export default function SettingsPage() {
           <p className="mt-1.5 text-xs text-text-muted">
             {syncStatus.lastError
               ? `Sync error: ${syncStatus.lastError}`
-              : syncStatus.lastSyncedAt
-                ? `Synced across your devices · last ${new Date(syncStatus.lastSyncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
-                : "Waiting for first sync…"}
+              : !syncStatus.bootstrapped
+                ? "Waiting for your data to appear on another device…"
+                : syncStatus.lastSyncedAt
+                  ? `Synced across your devices · last ${new Date(syncStatus.lastSyncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                  : "Waiting for first sync…"}
             {syncStatus.pendingCount > 0 && ` · ${syncStatus.pendingCount} pending`}
           </p>
         </Card>

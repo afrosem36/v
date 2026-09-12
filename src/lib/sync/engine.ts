@@ -1,7 +1,9 @@
 import type { VshapeDB } from "@/lib/db/db";
+import { markSyncBootstrapped } from "@/lib/auth/accounts";
 import { pendingOutboxCount } from "./outbox";
 import { flushOutbox } from "./push";
 import { pullChanges, getSyncCursor } from "./pull";
+import { attemptBootstrap } from "./bootstrap";
 
 const POLL_INTERVAL_MS = 25_000;
 
@@ -10,11 +12,13 @@ export interface SyncStatus {
   pendingCount: number;
   lastError: string | null;
   syncing: boolean;
+  /** False while this device is still waiting to see whether it should push or pull first — see bootstrap.ts. */
+  bootstrapped: boolean;
 }
 
 type Listener = (status: SyncStatus) => void;
 
-let status: SyncStatus = { lastSyncedAt: null, pendingCount: 0, lastError: null, syncing: false };
+let status: SyncStatus = { lastSyncedAt: null, pendingCount: 0, lastError: null, syncing: false, bootstrapped: false };
 const listeners = new Set<Listener>();
 
 function setStatus(patch: Partial<SyncStatus>): void {
@@ -35,12 +39,32 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let onlineHandler: (() => void) | null = null;
 let visibilityHandler: (() => void) | null = null;
 let running = false;
+let activeCycle: (() => void) | null = null;
 
-async function runCycle(instance: VshapeDB, userId: string): Promise<void> {
+/** Triggers an immediate cycle on the currently-running engine, if any — used by the manual "sync now" button in Settings. Goes through the same bootstrap gate as the interval, so it can never leak a not-yet-resolved device's placeholder data early. */
+export function triggerSyncNow(): void {
+  activeCycle?.();
+}
+
+async function runCycle(instance: VshapeDB, userId: string, knownAccountId: string): Promise<void> {
   if (running) return;
   running = true;
   setStatus({ syncing: true });
   try {
+    if (!status.bootstrapped) {
+      const outcome = await attemptBootstrap(instance, userId);
+      if (outcome === "waiting") {
+        setStatus({ lastError: null, syncing: false });
+        return;
+      }
+      await markSyncBootstrapped(knownAccountId);
+      setStatus({ bootstrapped: true });
+    }
+
+    // Only push once this device has actually resolved which side of the bootstrap race it's on —
+    // otherwise a still-"waiting" device's outbox (populated by ensureSeeded()'s own placeholder
+    // writes, queued the moment its Dexie hooks were registered) would leak that placeholder data
+    // up before attemptBootstrap ever gets to say no.
     await flushOutbox(instance, userId);
     await pullChanges(instance, userId, getSyncCursor(instance.name));
     setStatus({ lastSyncedAt: new Date().toISOString(), lastError: null, pendingCount: await pendingOutboxCount(instance) });
@@ -52,11 +76,17 @@ async function runCycle(instance: VshapeDB, userId: string): Promise<void> {
   }
 }
 
-/** Starts the periodic push/pull loop for the given device+account. Idempotent — call stopSyncEngine() first if switching accounts. */
-export function startSyncEngine(instance: VshapeDB, userId: string): void {
+/**
+ * Starts the periodic push/pull loop for the given device+account. `alreadyBootstrapped` comes
+ * from KnownAccount.syncBootstrappedAt — skips re-attempting the bootstrap race on every sign-in
+ * once it's already resolved. Idempotent — call stopSyncEngine() first if switching accounts.
+ */
+export function startSyncEngine(instance: VshapeDB, userId: string, knownAccountId: string, alreadyBootstrapped: boolean): void {
   stopSyncEngine();
+  status = { lastSyncedAt: null, pendingCount: 0, lastError: null, syncing: false, bootstrapped: alreadyBootstrapped };
 
-  const cycle = () => void runCycle(instance, userId);
+  const cycle = () => void runCycle(instance, userId, knownAccountId);
+  activeCycle = cycle;
   timer = setInterval(cycle, POLL_INTERVAL_MS);
   onlineHandler = cycle;
   visibilityHandler = () => {
@@ -75,5 +105,6 @@ export function stopSyncEngine(): void {
   if (visibilityHandler) document.removeEventListener("visibilitychange", visibilityHandler);
   onlineHandler = null;
   visibilityHandler = null;
-  status = { lastSyncedAt: null, pendingCount: 0, lastError: null, syncing: false };
+  activeCycle = null;
+  status = { lastSyncedAt: null, pendingCount: 0, lastError: null, syncing: false, bootstrapped: false };
 }

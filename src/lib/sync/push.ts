@@ -37,24 +37,26 @@ export async function flushOutbox(instance: VshapeDB, userId: string): Promise<v
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const chunk = entries.slice(i, i + BATCH_SIZE);
       const rows: SyncRowUpsert[] = [];
-      const sentIds: string[] = [];
+      const staleIds: string[] = []; // no row locally anymore (deleted again, or wiped by a bootstrap join) — nothing to push, ever
 
       for (const entry of chunk) {
         if (entry.op === "delete") {
           rows.push({ user_id: userId, table_name: tableName, row_id: entry.rowId, data: {}, deleted: true, updated_at: entry.ts });
-          sentIds.push(entry.id);
           continue;
         }
         const current = await table.get(entry.rowId);
-        if (!current) continue; // deleted again before this flush — nothing to push, drop the stale upsert
+        if (!current) {
+          staleIds.push(entry.id);
+          continue;
+        }
         rows.push({ user_id: userId, table_name: tableName, row_id: entry.rowId, data: current, deleted: false, updated_at: entry.ts });
-        sentIds.push(entry.id);
       }
 
+      if (staleIds.length > 0) await outboxTable.bulkDelete(staleIds);
       if (rows.length === 0) continue;
       const { error } = await supabase.from("sync_rows").upsert(rows, { onConflict: "user_id,table_name,row_id" });
       if (error) throw error;
-      await outboxTable.bulkDelete(sentIds);
+      await outboxTable.bulkDelete(chunk.filter((e) => !staleIds.includes(e.id)).map((e) => e.id));
     }
   }
 }
