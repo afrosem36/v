@@ -72,6 +72,16 @@ export async function markSyncBootstrapped(id: string): Promise<void> {
   await accountsDb.known.update(id, { syncBootstrappedAt: new Date().toISOString() });
 }
 
+/**
+ * Resets only the local "have I already done my first push/pull" bookkeeping flag — never
+ * touches any actual training data. Used by the manual "force full resync" action in Settings,
+ * for when this device's bootstrap resolved against a Supabase state that's since changed (e.g.
+ * the sync_rows table was cleared/reset) and needs to re-run against the current remote state.
+ */
+export async function clearSyncBootstrapped(id: string): Promise<void> {
+  await accountsDb.known.update(id, { syncBootstrappedAt: null });
+}
+
 /** Removes the device shortcut only — does not touch the account's real data anywhere else. */
 export async function forgetKnownAccount(id: string): Promise<void> {
   await accountsDb.known.delete(id);

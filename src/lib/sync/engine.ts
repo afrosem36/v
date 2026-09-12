@@ -46,6 +46,17 @@ export function triggerSyncNow(): void {
   activeCycle?.();
 }
 
+/**
+ * Flips this session's in-memory "already bootstrapped" flag back off, so the next cycle
+ * re-attempts the bootstrap race against Supabase's current state (see bootstrap.ts) instead of
+ * assuming a decision made earlier in this session still holds. Pair with clearSyncBootstrapped()
+ * (accounts.ts) so the reset also survives a reload — this alone only affects the running session.
+ */
+export function resetBootstrapState(): void {
+  setStatus({ bootstrapped: false, lastError: null });
+  activeCycle?.();
+}
+
 async function runCycle(instance: VshapeDB, userId: string, knownAccountId: string): Promise<void> {
   if (running) return;
   running = true;

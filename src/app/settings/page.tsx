@@ -18,7 +18,8 @@ import { todayStr } from "@/lib/utils/date";
 import { LastUpdated } from "@/components/LastUpdated";
 import { useAuth } from "@/lib/auth/AuthProvider";
 import { SUPABASE_CONFIGURED } from "@/lib/supabase/client";
-import { getSyncStatus, subscribeSyncStatus, triggerSyncNow, type SyncStatus } from "@/lib/sync/engine";
+import { getSyncStatus, subscribeSyncStatus, triggerSyncNow, resetBootstrapState, type SyncStatus } from "@/lib/sync/engine";
+import { clearSyncBootstrapped } from "@/lib/auth/accounts";
 
 function useSyncStatus(): SyncStatus {
   const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
@@ -47,6 +48,17 @@ export default function SettingsPage() {
 
   function handleSyncNow() {
     triggerSyncNow();
+  }
+
+  async function handleForceResync() {
+    if (
+      !confirm(
+        "This re-pushes ALL of this device's data to your account as the source of truth, and re-checks whether it should pull instead. Only use this if you're sure this device already has your real, complete history (or if you just cleared/reset your sync data on Supabase). Continue?"
+      )
+    )
+      return;
+    await clearSyncBootstrapped(user.knownAccountId);
+    resetBootstrapState();
   }
 
   async function handleExportJSON() {
@@ -119,6 +131,9 @@ export default function SettingsPage() {
                   : "Waiting for first sync…"}
             {syncStatus.pendingCount > 0 && ` · ${syncStatus.pendingCount} pending`}
           </p>
+          <button onClick={handleForceResync} className="mt-2 text-left text-[11px] font-medium text-text-faint underline underline-offset-2">
+            Force full resync from this device
+          </button>
         </Card>
       )}
 
