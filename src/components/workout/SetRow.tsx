@@ -13,6 +13,11 @@ import { loadTypeToEntryMode } from "@/lib/engine/weight-math";
 import { askCoach } from "@/lib/groq/askCoach";
 import type { Exercise, ExerciseSet } from "@/types/domain";
 
+const BARBELL_ENTRY_STYLE_OPTIONS = [
+  { value: "parts" as const, label: "Bar + Plates" },
+  { value: "total" as const, label: "Enter Total" },
+];
+
 interface CompletedSetRowProps {
   setNumber: number;
   set: ExerciseSet;
@@ -196,21 +201,13 @@ export function PendingSetRow({
 
       {!isCardio && entryMode === "barbell_total" && (
         <div className="mb-3">
-          <div className="mb-2 flex gap-2">
-            <button
-              type="button"
-              onClick={() => setBarbellEntryStyle("parts")}
-              className={`h-8 flex-1 rounded-lg text-xs font-medium ${barbellEntryStyle === "parts" ? "bg-accent text-accent-foreground" : "bg-surface-2 text-text-muted"}`}
-            >
-              Bar + Plates
-            </button>
-            <button
-              type="button"
-              onClick={() => setBarbellEntryStyle("total")}
-              className={`h-8 flex-1 rounded-lg text-xs font-medium ${barbellEntryStyle === "total" ? "bg-accent text-accent-foreground" : "bg-surface-2 text-text-muted"}`}
-            >
-              Enter Total
-            </button>
+          <div className="mb-2">
+            <SegmentedControl
+              options={BARBELL_ENTRY_STYLE_OPTIONS}
+              value={barbellEntryStyle}
+              onChange={setBarbellEntryStyle}
+              size="sm"
+            />
           </div>
 
           {barbellEntryStyle === "parts" ? (

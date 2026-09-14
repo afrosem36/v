@@ -8,6 +8,7 @@ import { ChevronLeft, LogOut, UserRound, Trash2, RefreshCw, ChevronRight } from 
 import { Card, CardLabel } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { NumberStepper } from "@/components/ui/NumberStepper";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { useAuth } from "@/lib/auth/AuthProvider";
 import { deleteAccountEverywhere } from "@/lib/auth/accounts";
 import { SUPABASE_CONFIGURED } from "@/lib/supabase/client";
@@ -24,6 +25,8 @@ import type { TrainingGoal } from "@/types/domain";
 
 const inputClass =
   "h-12 w-full rounded-xl border border-border bg-surface-2 px-4 text-base outline-none placeholder:text-text-faint focus:border-accent";
+
+const GENDER_OPTIONS = (["male", "female", "other"] as Gender[]).map((g) => ({ value: g, label: g[0].toUpperCase() + g.slice(1) }));
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -156,19 +159,7 @@ export default function ProfilePage() {
           </label>
           <div>
             <span className="mb-1.5 block text-xs text-text-muted">Gender</span>
-            <div className="grid grid-cols-3 gap-2">
-              {(["male", "female", "other"] as Gender[]).map((g) => (
-                <button
-                  key={g}
-                  onClick={() => setGender(g)}
-                  className={`h-11 rounded-xl border text-sm font-medium capitalize ${
-                    gender === g ? "border-accent bg-accent/10" : "border-border bg-surface-2 text-text-muted"
-                  }`}
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl options={GENDER_OPTIONS} value={gender} onChange={setGender} size="md" />
           </div>
           <Button fullWidth onClick={handleSaveProfile}>
             {saved ? "Saved" : "Save details"}

@@ -20,7 +20,19 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   // Read-only: Dexie runs a live query inside a readonly transaction, so writing from in here
   // throws ReadOnlyError. The backfill write happens in the effect below instead.
   const state = useLiveQuery(async () => {
-    const settings = await getSettings();
+    // getSettings() throws if appSettings hasn't been seeded yet. AuthGate (the parent) only
+    // renders this component once its own settings query succeeded, but that doesn't guarantee
+    // this querier's *first* run lands after that write is visible to it — Dexie can re-run a
+    // liveQuery querier on mount before its table subscriptions are established. Treating that as
+    // "still loading" instead of letting it throw is what stops it becoming an uncaught render
+    // error (dexie-react-hooks rethrows a rejected querier synchronously, and with no error
+    // boundary in the tree that crashes to Next's generic error page).
+    let settings;
+    try {
+      settings = await getSettings();
+    } catch {
+      return undefined;
+    }
     if (settings.onboardingCompletedAt) return { needsOnboarding: false, shouldBackfill: false };
 
     const completed = await getCompletedSessions(1);

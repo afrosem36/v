@@ -80,7 +80,16 @@ function LocalOnlyGate({ children }: { children: React.ReactNode }) {
     }, 0);
   }, []);
 
-  const settings = useLiveQuery(() => (ready ? getSettings() : undefined), [ready]);
+  const settings = useLiveQuery(async () => {
+    if (!ready) return undefined;
+    // Belt-and-suspenders: `ready` only flips after ensureSeeded() resolves, but a thrown
+    // "not seeded yet" here would otherwise be an uncaught render error (see OnboardingGate.tsx).
+    try {
+      return await getSettings();
+    } catch {
+      return undefined;
+    }
+  }, [ready]);
 
   if (!ready || !settings) return <LoadingScreen label="Loading…" />;
 
@@ -265,7 +274,16 @@ function SupabaseReady({
   email: string;
   children: React.ReactNode;
 }) {
-  const settings = useLiveQuery(() => getSettings(), [database]);
+  const settings = useLiveQuery(async () => {
+    // activate() awaits ensureSeeded() and getSettings() before this component ever mounts, so
+    // this should always succeed — but a thrown "not seeded yet" from a stray extra querier run
+    // would otherwise be an uncaught render error (see OnboardingGate.tsx for the full mechanism).
+    try {
+      return await getSettings();
+    } catch {
+      return undefined;
+    }
+  }, [database]);
 
   if (!settings) return <LoadingScreen label="Loading…" />;
 

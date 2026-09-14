@@ -19,6 +19,54 @@ function describeSplit(key: string): string {
   return `${split.label} (${split.description})`;
 }
 
+/**
+ * The split-style dropdown used to be advisory only — the prompt described it but let ChatGPT
+ * "deviate with a reason", which in practice meant a user who picked "one muscle a day" still got
+ * combined days like "Chest + Triceps". Each non-"auto" split now gets an unambiguous, mandatory
+ * day-by-day muscle assignment so the model has no room to reinterpret it.
+ */
+function splitRule(key: string, daysPerWeek: number): string | null {
+  switch (key) {
+    case "ppl":
+      return (
+        "Follow Push / Pull / Legs exactly, cycling through the three as many times as the day count needs: " +
+        "every PUSH day trains only chest, shoulders and triceps; every PULL day trains only back and biceps; " +
+        "every LEGS day trains only quads, hamstrings, glutes and calves. Never put a pull muscle on a push day " +
+        "or vice versa, and never fold legs into an upper-body day."
+      );
+    case "bro":
+      return (
+        "Follow a strict one-muscle-group-per-day split — exactly one primary muscle group owns each training day, " +
+        "with no other primary muscle group sharing it. A chest day trains chest only; a back day trains back only; " +
+        "a shoulders day trains shoulders only; a legs day trains only quads, hamstrings, glutes and calves. Biceps " +
+        "and triceps are the one exception — they share a single dedicated 'arms' day together, never attached to a " +
+        `chest, back or shoulders day. With ${daysPerWeek} day(s) available, assign in this priority order and stop ` +
+        "once the days run out: chest, back, shoulders, arms, legs — then, only if extra days remain, repeat a day " +
+        "for a lagging muscle rather than combining two different primary muscles into one day."
+      );
+    case "upper_lower":
+      return (
+        "Follow Upper / Lower exactly, alternating across the week: every UPPER day trains only chest, back, " +
+        "shoulders, biceps and triceps; every LOWER day trains only quads, hamstrings, glutes and calves (core work " +
+        "may go on either). Never mix an upper-body muscle into a lower day or vice versa."
+      );
+    case "full_body":
+      return (
+        "Every training day must be a genuine full-body session — at least one exercise each for chest, back, " +
+        "legs and shoulders, plus arms if the session length allows. No day may isolate to only one or two muscle " +
+        "groups; that would turn this into a different split."
+      );
+    case "chest_bi":
+      return (
+        "Follow this antagonist pairing exactly, with no other combination allowed: one day type trains chest and " +
+        "biceps together, a different day type trains back and triceps together, and legs get their own dedicated " +
+        "day. Never pair chest with triceps or back with biceps — that is a different split from the one requested."
+      );
+    default:
+      return null;
+  }
+}
+
 function describeExperience(key: string): string {
   return EXPERIENCE_LEVELS.find((e) => e.key === key)?.description ?? key;
 }
@@ -60,7 +108,7 @@ I want to ${goal.brief}.
 HOW I TRAIN
 - ${intake.daysPerWeek} days per week
 - About ${intake.sessionMinutes} minutes per session
-- Split preference: ${describeSplit(intake.splitStyle)}
+- Split: ${describeSplit(intake.splitStyle)}
 - Equipment available at my gym: ${availableEquipment.join(", ") || "bodyweight only"}
 ${intake.limitations.trim() ? `- Injuries / limitations: ${intake.limitations.trim()}\n` : ""}${intake.dislikes.trim() ? `- Exercises I don't want: ${intake.dislikes.trim()}\n` : ""}${intake.notes.trim() ? `- Other notes: ${intake.notes.trim()}\n` : ""}
 WHAT I WANT BACK
@@ -70,10 +118,10 @@ RULES
 1. Answer with ONE JSON object and nothing else. No explanation before it, no notes after it, no markdown code fence.
 2. Use the exercise ids from the library below wherever one fits. Only invent an exercise if the library genuinely has nothing — then put it in "customExercises" and reference its id.
 3. Schedule exactly ${intake.daysPerWeek} training days per week. Leave the other weekdays out of "week" — the app treats a missing weekday as a rest day.
-4. Compounds before isolation inside each session. 3-8 exercises per session.
-5. Do not prescribe weights. My app works out the load for every set from what I actually lifted last time. You choose the exercises, sets and rep ranges.
-6. Every "why" is one or two plain sentences explaining why that exercise is in that slot for my goal.
-7. As well as putting the JSON in your reply, also save it as a downloadable .txt file (e.g. plan.txt) so I can download it directly — I'm often on my phone and copying a reply this long doesn't work reliably.
+${splitRule(intake.splitStyle, intake.daysPerWeek) ? `4. ${splitRule(intake.splitStyle, intake.daysPerWeek)} Apply this same split to every block for the whole program — it is a hard requirement, not a suggestion you can improve on.\n` : ""}5. Compounds before isolation inside each session. 3-8 exercises per session.
+6. Do not prescribe weights. My app works out the load for every set from what I actually lifted last time. You choose the exercises, sets and rep ranges.
+7. Every "why" is one or two plain sentences explaining why that exercise is in that slot for my goal.
+8. As well as putting the JSON in your reply, also save it as a downloadable .txt file (e.g. plan.txt) so I can download it directly — I'm often on my phone and copying a reply this long doesn't work reliably.
 
 EXACT JSON SHAPE
 {
@@ -194,15 +242,16 @@ A fresh ${BLOCK_COUNT * WEEKS_PER_BLOCK}-week program in ${BLOCK_COUNT} blocks o
 - Keep what's clearly progressing.
 - Fix anything the training has been neglecting.
 - ${intake.daysPerWeek} days a week, about ${intake.sessionMinutes} minutes a session.
+- Split: ${describeSplit(intake.splitStyle)}
 - Equipment available at my gym: ${availableEquipment.join(", ") || "bodyweight only"}.
 ${intake.limitations.trim() ? `- Injuries / limitations: ${intake.limitations.trim()}\n` : ""}${intake.dislikes.trim() ? `- Exercises I don't want: ${intake.dislikes.trim()}\n` : ""}${intake.notes.trim() ? `- Other notes: ${intake.notes.trim()}\n` : ""}
 RULES
 1. Answer with ONE JSON object and nothing else. No text before it, no notes after it, no markdown fence.
 2. Use exercise ids from the library below. Only invent one if the library has nothing suitable, and then put it in "customExercises".
 3. Schedule exactly ${intake.daysPerWeek} training days a week. Weekdays you leave out of "week" are rest days.
-4. Do not prescribe weights — my app computes every set's load from what I actually lifted. You choose exercises, sets and rep ranges.
-5. In each "why", name the thing in my data that drove the decision — the stall, the missing muscle, the trend. Not "it's good for you".
-6. As well as putting the JSON in your reply, also save it as a downloadable .txt file (e.g. plan.txt) so I can download it directly — I'm often on my phone and copying a reply this long doesn't work reliably.
+${splitRule(intake.splitStyle, intake.daysPerWeek) ? `4. ${splitRule(intake.splitStyle, intake.daysPerWeek)} Apply this same split to every block for the whole program — it is a hard requirement, not a suggestion you can improve on.\n` : ""}5. Do not prescribe weights — my app computes every set's load from what I actually lifted. You choose exercises, sets and rep ranges.
+6. In each "why", name the thing in my data that drove the decision — the stall, the missing muscle, the trend. Not "it's good for you".
+7. As well as putting the JSON in your reply, also save it as a downloadable .txt file (e.g. plan.txt) so I can download it directly — I'm often on my phone and copying a reply this long doesn't work reliably.
 
 EXACT JSON SHAPE
 {

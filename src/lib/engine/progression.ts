@@ -41,11 +41,6 @@ export function targetRirRangeForPhase(phase: TrainingPhase): [number, number] {
   return phase === "calibration" ? [2, 3] : [1, 2];
 }
 
-/** @deprecated kept for callers that only want a single representative number (e.g. RIR chip default) */
-export function targetRirForPhase(phase: TrainingPhase): number {
-  return targetRirRangeForPhase(phase)[0];
-}
-
 const LAYOFF_LONG_DAYS = 21;
 const LAYOFF_SHORT_DAYS = 10;
 const LAYOFF_LONG_BACKOFF = 0.7; // ~30% lighter

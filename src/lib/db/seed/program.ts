@@ -87,7 +87,7 @@ export const TEMPLATE_WORKOUT_DAY_EXERCISES: WorkoutDayExercise[] = [
     { exerciseId: "ex_walking_lunge", order: 2, priority: P(2), targetSets: 3, repRangeMin: 10, repRangeMax: 12, restSeconds: 90 },
     { exerciseId: "ex_calf_raise_machine", order: 3, priority: P(3), targetSets: 3, repRangeMin: 12, repRangeMax: 20, restSeconds: 60 },
     { exerciseId: "ex_lying_leg_raise", order: 4, priority: P(4), targetSets: 3, repRangeMin: 10, repRangeMax: 15, restSeconds: 60 },
-    { exerciseId: "ex_treadmill_walk", order: 5, priority: P(2), targetSets: 1, repRangeMin: 15, repRangeMax: 20, restSeconds: 0 },
+    { exerciseId: "ex_treadmill_walk", order: 5, priority: P(2), targetSets: 1, repRangeMin: 15, repRangeMax: 25, restSeconds: 0 },
   ]),
 ];
 

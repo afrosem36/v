@@ -11,6 +11,9 @@ import {
   TriangleAlert,
   Wand2,
   Dumbbell,
+  Camera,
+  X,
+  Sparkles,
 } from "lucide-react";
 import { Card, CardLabel } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -26,11 +29,14 @@ import { getSettings } from "@/lib/db/repo/settings";
 import { getLatestBodyWeight } from "@/lib/db/repo/body";
 import { applyCoachBlock, saveCoachPlan } from "@/lib/db/repo/coach";
 import { copyToClipboard, CHATGPT_URL } from "@/lib/utils/clipboard";
+import { resizeImageToDataURL } from "@/lib/utils/image";
+import { GeneratingPlanLoader } from "@/components/coach/GeneratingPlanLoader";
 import type { IntakeAnswers } from "@/lib/coach/contract";
 import type { TrainingGoal } from "@/types/domain";
 
 export type CoachFlowMode = "new" | "update";
-type Step = "goal" | "intake" | "prompt" | "paste" | "review";
+type Step = "goal" | "intake" | "generate" | "prompt" | "paste" | "review";
+const MAX_PHOTOS = 3;
 
 interface CoachPlanFlowProps {
   mode: CoachFlowMode;
@@ -58,7 +64,10 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
   const [limitations, setLimitations] = useState("");
   const [dislikes, setDislikes] = useState("");
   const [notes, setNotes] = useState("");
-  const [includePhoto, setIncludePhoto] = useState(true);
+
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   const [pasted, setPasted] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
@@ -66,6 +75,7 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const context = useLiveQuery(async () => {
     const [exercises, availableEquipment, settings, weight] = await Promise.all([
@@ -100,7 +110,7 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
     limitations,
     dislikes,
     notes,
-    includePhotoInstruction: includePhoto,
+    includePhotoInstruction: true,
   };
 
   const prompt = useMemo(() => {
@@ -111,7 +121,7 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
       : buildCoachPrompt(args);
     // Rebuilt whenever any intake answer or the underlying data changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context, mode, goal, splitStyle, daysPerWeek, sessionMinutes, experience, limitations, dislikes, notes, includePhoto]);
+  }, [context, mode, goal, splitStyle, daysPerWeek, sessionMinutes, experience, limitations, dislikes, notes]);
 
   if (!context) return <div className="text-sm text-text-muted">Loading…</div>;
 
@@ -149,6 +159,37 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
     const text = await file.text();
     setPasted(text);
     importText(text);
+  }
+
+  async function handleAddPhotos(files: FileList) {
+    const remaining = MAX_PHOTOS - photos.length;
+    const picked = Array.from(files).slice(0, Math.max(0, remaining));
+    const resized = await Promise.all(picked.map((f) => resizeImageToDataURL(f)));
+    setPhotos((prev) => [...prev, ...resized]);
+  }
+
+  function removePhoto(index: number) {
+    setPhotos((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleGenerate() {
+    setGenerateError(null);
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/coach/generate-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, images: photos }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Plan generation failed");
+      setPhotos([]);
+      importText(data.text as string);
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "Plan generation failed");
+    } finally {
+      setGenerating(false);
+    }
   }
 
   async function handleApply(blockIndex: number) {
@@ -291,32 +332,95 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
             </div>
           </Card>
 
-          <Card>
-            <label className="flex items-start gap-3">
-              <input
-                type="checkbox"
-                checked={includePhoto}
-                onChange={(e) => setIncludePhoto(e.target.checked)}
-                className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--color-accent)]"
-              />
-              <span>
-                <span className="block text-sm font-medium">I&apos;ll upload a physique photo in ChatGPT</span>
-                <span className="mt-0.5 block text-xs text-text-muted">
-                  Adds an instruction telling it to read the photo and say what it saw. Attach the photo in ChatGPT before you send the
-                  prompt — the photo stays in your ChatGPT chat and never touches this app.
-                </span>
-              </span>
-            </label>
-          </Card>
-
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setStep("goal")}>
               Back
             </Button>
-            <Button size="lg" fullWidth onClick={() => setStep("prompt")}>
-              Build my prompt
+            <Button size="lg" fullWidth onClick={() => setStep("generate")}>
+              Continue
             </Button>
           </div>
+        </div>
+      )}
+
+      {step === "generate" && (
+        <div className="flex flex-col gap-3">
+          {generating ? (
+            <GeneratingPlanLoader />
+          ) : (
+            <>
+              <Card>
+                <div className="flex items-center gap-2">
+                  <Camera size={15} className="text-accent" />
+                  <CardLabel>Physique photos (optional)</CardLabel>
+                </div>
+                <p className="mt-2 text-sm text-text-muted">
+                  Add up to {MAX_PHOTOS} photos (front / side / back) and the plan is built around what it actually sees — which
+                  areas are lagging, posture, rough body-fat range. Photos are sent for analysis and never saved.
+                </p>
+
+                {photos.length > 0 && (
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {photos.map((src, i) => (
+                      <div key={i} className="relative aspect-square overflow-hidden rounded-xl bg-surface-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element -- data URL, next/image can't optimize it anyway */}
+                        <img src={src} alt={`Photo ${i + 1}`} className="h-full w-full object-cover" />
+                        <button
+                          onClick={() => removePhoto(i)}
+                          className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white"
+                          aria-label="Remove photo"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.length) handleAddPhotos(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                {photos.length < MAX_PHOTOS && (
+                  <Button variant="secondary" size="lg" fullWidth className="mt-3" onClick={() => photoInputRef.current?.click()}>
+                    <Upload size={18} />
+                    Add photo{photos.length > 0 ? "s" : ""}
+                  </Button>
+                )}
+              </Card>
+
+              {generateError && (
+                <Card className="border-danger/40 bg-danger/5">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-danger">
+                    <TriangleAlert size={16} />
+                    Couldn&apos;t generate a plan
+                  </div>
+                  <p className="mt-2 text-xs text-text-muted">{generateError}</p>
+                </Card>
+              )}
+
+              <Button size="lg" fullWidth onClick={handleGenerate}>
+                <Sparkles size={18} />
+                Generate my plan
+              </Button>
+
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={() => setStep("intake")}>
+                  Back
+                </Button>
+                <Button variant="secondary" fullWidth onClick={() => setStep("prompt")}>
+                  Prefer to do this manually in ChatGPT?
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -353,7 +457,7 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
           </details>
 
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => setStep("intake")}>
+            <Button variant="secondary" onClick={() => setStep("generate")}>
               Back
             </Button>
             <Button size="lg" fullWidth onClick={() => setStep("paste")}>
@@ -437,8 +541,8 @@ export function CoachPlanFlow({ mode, onboarding = false, onApplied }: CoachPlan
 }
 
 function StepDots({ step }: { step: Step }) {
-  const steps: Step[] = ["goal", "intake", "prompt", "paste", "review"];
-  const index = steps.indexOf(step);
+  const steps: Step[] = ["goal", "intake", "generate", "review"];
+  const index = steps.indexOf(step === "prompt" || step === "paste" ? "generate" : step);
   return (
     <div className="flex gap-1.5">
       {steps.map((s, i) => (

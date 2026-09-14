@@ -21,9 +21,10 @@ vercel            # follow the prompts, links this folder to a Vercel project
 vercel --prod     # deploy to your production URL
 ```
 
-By default it's a static/client app with no environment variables needed. Two optional features need them, both in your Vercel project's environment variables (see `.env.local` locally for the same setup) — **and note Vercel only picks up new/changed variables on the next deployment, so redeploy after adding any of these**:
+By default it's a static/client app with no environment variables needed. Three optional features need them, set in your Vercel project's environment variables (see `.env.local` locally for the same setup) — **and note Vercel only picks up new/changed variables on the next deployment, so redeploy after adding any of these**:
 
 - **AI coaching** (session feedback, exercise explanations, the training-partner chat): set `GROQ_API_KEY` (and optionally `GROQ_MODEL`).
+- **AI plan generation from physique photos** (the in-app "Generate my plan" step in AI Coach / onboarding): set `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`, defaults to `gpt-5.6-luna` — OpenAI's cheapest vision-capable tier). Without it, that step shows an error and users fall back to the manual copy-prompt-into-ChatGPT flow.
 - **Google sign-in + cross-device sync**: set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from your Supabase project's Settings → API, enable the Google provider under Authentication → Providers, and run `src/lib/sync/schema.sql` once in the Supabase SQL editor to create the `sync_rows` table sync needs. Without these, the app runs as a single implicit local account with no login screen and no sync at all — signing in on a second device otherwise starts that device with an empty, brand-new local database.
 
 ## What's here
